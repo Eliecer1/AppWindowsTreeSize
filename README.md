@@ -2,22 +2,50 @@
 
 App de escritorio para Windows que analiza tus discos, te muestra qué ocupa espacio y te ayuda a liberarlo de forma segura.
 
-## Estado
+## Qué hace
 
-En construcción. Ya existe:
+- **Inicio**: uso de cada disco, cuánto puedes liberar, qué tipos de archivo ocupan más y los archivos más pesados.
+- **Explorar**: mapa de bloques de cada carpeta. Haz clic en un bloque para entrar; desde cada elemento puedes abrir el Explorador de Windows o enviarlo a la papelera.
+- **Limpiar**: sugerencias clasificadas por riesgo (temporales, Windows.old, Windows Update, cachés de navegadores, npm, pip y sombreadores, ISOs e instaladores en Descargas, `node_modules`, hibernación, papelera). Todo va a la papelera de reciclaje, así que se puede recuperar.
+- **Tipos de archivo**: cuánto ocupa cada tipo en el disco.
+- **Ctrl+K**: busca por nombre, o por extensión escribiendo un punto (por ejemplo `.iso`).
 
-- **Motor de escaneo** (`crates/scanner`, Rust): recorre la unidad en paralelo, suma el tamaño de cada carpeta, clasifica los archivos por tipo (videos, imágenes, programas, instaladores, sistema, documentos, código, caché) y permite buscar, listar los archivos más grandes y descontar lo que se borra.
-- **App Tauri** (`src-tauri`): lista los discos, lanza el análisis con progreso en vivo, abre el Explorador de Windows en una carpeta o archivo, envía elementos a la papelera y propone limpiezas (temporales, Windows.old, cachés de navegadores, npm y sombreadores, ISOs e instaladores en Descargas, `node_modules`, hibernación, papelera).
+## Cómo está hecho
 
-Falta la interfaz en React, que seguirá el [prototipo aprobado](https://claude.ai/artifact/S64GhgUozQuEzyvV7zD3zM).
+| Parte | Carpeta | Tecnología |
+|---|---|---|
+| Motor de escaneo | `crates/scanner` | Rust, recorrido en paralelo con rayon |
+| App de escritorio | `src-tauri` | Tauri 2 |
+| Interfaz | `src` | React 19 + TypeScript + Vite |
 
-## Requisitos para compilar en Windows
+La interfaz nunca recibe el árbol completo: pide a Rust solo la carpeta que está mostrando, así funciona igual con millones de archivos.
 
-1. [Rust](https://rustup.rs) (estable).
-2. [Node.js](https://nodejs.org) 22 o superior.
-3. Microsoft C++ Build Tools y WebView2 (Windows 11 ya lo trae). Ver la [guía de Tauri](https://v2.tauri.app/start/prerequisites/).
+## Descargar el instalador
 
-## Pruebas del motor
+Cada cambio en `main` se compila en GitHub Actions. Entra en la pestaña **Actions**, abre la última ejecución de **Compilar** y descarga **AppWindowsTreeSize-instaladores** (trae el `.msi` y el `.exe`).
+
+## Compilar en tu PC (Windows)
+
+Requisitos: [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 22 o superior y las [dependencias de Tauri para Windows](https://v2.tauri.app/start/prerequisites/) (Microsoft C++ Build Tools; WebView2 ya viene en Windows 11).
+
+```sh
+npm install
+npm run tauri dev     # abre la app en modo desarrollo
+npm run tauri build   # genera el instalador en target/release/bundle
+```
+
+Para analizar carpetas protegidas del sistema, ejecuta la app como administrador.
+
+## Ver la interfaz en el navegador
+
+```sh
+npm install
+npm run dev
+```
+
+Fuera de la app de escritorio la interfaz usa datos de ejemplo (se indica con la etiqueta "Datos de ejemplo").
+
+## Pruebas
 
 ```sh
 cargo test -p scanner

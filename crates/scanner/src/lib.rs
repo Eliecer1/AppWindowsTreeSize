@@ -211,6 +211,8 @@ fn flatten(tmp: Tmp, parent: NodeId, out: &mut Vec<Entry>) -> NodeId {
 #[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
     pub id: NodeId,
+    /// Carpeta que lo contiene; `None` en la raíz.
+    pub parent: Option<NodeId>,
     pub name: String,
     pub path: String,
     pub is_dir: bool,
@@ -269,6 +271,7 @@ impl Tree {
         let e = self.entry(id)?;
         Some(NodeInfo {
             id,
+            parent: (e.parent != NO_PARENT).then_some(e.parent),
             name: if id == Self::ROOT { self.root_path.to_string_lossy().into_owned() } else { e.name.to_string() },
             path: self.path_of(id).to_string_lossy().into_owned(),
             is_dir: e.is_dir,
