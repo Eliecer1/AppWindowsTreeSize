@@ -527,7 +527,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(&dir.path().join("lleno.bin"), 1 << 20);
         // Un archivo disperso aparenta 64 MB pero casi no ocupa espacio en disco.
-        fs::File::create(dir.path().join("disperso.bin")).unwrap().set_len(64 << 20).unwrap();
+        let sparse_path = dir.path().join("disperso.bin");
+        fs::File::create(&sparse_path).unwrap();
+        // En Windows un archivo solo es disperso si se marca antes de agrandarlo.
+        #[cfg(windows)]
+        assert!(std::process::Command::new("fsutil").args(["sparse", "setflag"]).arg(&sparse_path).status().unwrap().success());
+        fs::OpenOptions::new().write(true).open(&sparse_path).unwrap().set_len(64 << 20).unwrap();
         let t = scan(dir.path(), &Progress::default());
         let sparse = t.info(t.find(Path::new("disperso.bin")).unwrap()).unwrap();
         let full = t.info(t.find(Path::new("lleno.bin")).unwrap()).unwrap();
