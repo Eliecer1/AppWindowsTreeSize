@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
-import { NodeIcon, StackBar, Treemap } from "../components";
+import { CloudIcon, CloudNote, NodeIcon, StackBar, Treemap } from "../components";
 import { CATEGORY, date, driveLetter, fmtPct, int, pct, size } from "../format";
 import type { FolderView, NodeInfo } from "../types";
 
@@ -102,7 +102,9 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             <button key={c.id} role="listitem" className={`row ${sel?.id === c.id ? "sel" : ""}`} onClick={() => open(c)} title={c.path}>
               <NodeIcon node={c} px={16} />
               <span className="nm">{c.name}{!c.isDir && c.ext && <small>.{c.ext}</small>}</span>
-              <span className="sz">{size(c.size)}</span>
+              {c.cloudOnly
+                ? <span className="sz cloud" title={`Pesa ${size(c.logical)}, pero está solo en la nube`}><CloudIcon /> {size(c.logical)}</span>
+                : <span className="sz">{size(c.size)}{c.cloud > 0 && <span className="cloud" style={{ marginLeft: 5 }} title={`${size(c.cloud)} más están solo en la nube`}><CloudIcon px={12} /></span>}</span>}
               <span className="bar"><i style={{ width: `${(c.size / biggest) * 100}%`, background: CATEGORY[c.category].color }} /></span>
             </button>
           ))}
@@ -117,10 +119,11 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             <div style={{ minWidth: 0 }}>
               <h3>{shown.id === 0 ? driveLetter(root) : shown.name}</h3>
               <p>
-                <span className="num">{size(shown.size)}</span> · {fmtPct(pct(shown.size, folder.ancestors[0].size))} del espacio analizado ·{" "}
+                <span className="num">{size(shown.size)}</span> en disco · {fmtPct(pct(shown.size, folder.ancestors[0].size))} del espacio analizado ·{" "}
                 {shown.isDir ? <>{int(shown.files)} archivos{shown.dirs > 0 && <> en {int(shown.dirs)} carpetas</>}</> : <>{shown.ext ? `.${shown.ext}` : "sin extensión"} · {CATEGORY[shown.category].name}</>}
                 {" "}· modificado {date(shown.modified)}
               </p>
+              <CloudNote node={shown} />
               {shown.id === n.id && <div style={{ marginTop: 10, maxWidth: 420 }}><StackBar parts={folder.categories} total={n.size} /></div>}
             </div>
             <div className="actions">
@@ -130,7 +133,10 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             {confirm && (
               <div className="confirm" style={{ gridColumn: "1 / -1" }}>
                 <b>¿Enviar {shown.name} a la papelera?</b>
-                <span>Se liberarán {size(shown.size)}. Podrás recuperarlo desde la papelera de reciclaje.</span>
+                <span>{shown.size > 0 ? `Se liberarán ${size(shown.size)}.` : "No liberará espacio en tu disco."} Podrás recuperarlo desde la papelera de reciclaje.</span>
+                {shown.cloud > 0 && (
+                  <span><b>Ojo:</b> {shown.cloudOnly ? "este archivo está" : `${int(shown.cloudFiles)} archivos están`} en OneDrive u otra nube. Borrarlo aquí también lo borra de la nube, y no libera espacio por esa parte.</span>
+                )}
                 <div className="actions">
                   <button className="btn primary" onClick={trash}>Sí, enviar a la papelera</button>
                   <button className="btn" onClick={() => setConfirm(false)}>Cancelar</button>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
-import { Legend, Ring, StackBar } from "../components";
+import { CloudIcon, Legend, Ring, StackBar } from "../components";
 import { CATEGORY, driveLabel, driveLetter, int, pct, seconds, size } from "../format";
 import type { CategorySize, Drive, NodeInfo } from "../types";
 
@@ -31,13 +31,14 @@ function ScanStatus({ ctx, drive }: { ctx: Ctx; drive: Drive }) {
 export function Home({ ctx }: { ctx: Ctx }) {
   const { api, primary, drives, version } = ctx;
   const [cats, setCats] = useState<CategorySize[]>([]);
+  const [rootInfo, setRootInfo] = useState<NodeInfo | null>(null);
   const [largest, setLargest] = useState<NodeInfo[]>([]);
   const [savings, setSavings] = useState<{ total: number; safe: number; review: number } | null>(null);
 
   useEffect(() => {
     if (!primary?.scanned) return;
     const r = primary.root;
-    api.getFolder(r, 0, 0).then((f) => setCats(f.categories)).catch(() => {});
+    api.getFolder(r, 0, 0).then((f) => { setCats(f.categories); setRootInfo(f.node); }).catch(() => {});
     api.largestFiles(r, 0, 10).then(setLargest).catch(() => {});
     api.cleanupSuggestions(r).then((s) => setSavings({
       total: s.reduce((a, x) => a + x.size, 0),
@@ -84,6 +85,11 @@ export function Home({ ctx }: { ctx: Ctx }) {
               <div className="stat"><small>Usado</small><b>{size(used)}</b></div>
               <div className="stat"><small>Libre</small><b>{size(primary.available)}</b></div>
               <div className="stat"><small>Capacidad</small><b>{size(primary.total)}</b></div>
+              {rootInfo && rootInfo.cloud > 0 && (
+                <div className="stat cloud" title={`${int(rootInfo.cloudFiles)} archivos de OneDrive u otra nube que no están descargados en este PC`}>
+                  <small><CloudIcon px={12} /> Solo en la nube</small><b>{size(rootInfo.cloud)}</b>
+                </div>
+              )}
             </div>
             <ScanStatus ctx={ctx} drive={primary} />
             {primary.scanned && <div><button className="btn" onClick={() => ctx.explore(primary.root)}>Explorar {driveLetter(primary.root)}</button></div>}

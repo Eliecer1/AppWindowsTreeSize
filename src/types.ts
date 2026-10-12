@@ -19,7 +19,15 @@ export interface NodeInfo {
   name: string;
   path: string;
   isDir: boolean;
+  /** Espacio que ocupa realmente en el disco. */
   size: number;
+  /** Tamaño que muestra el Explorador de Windows. */
+  logical: number;
+  /** Bytes que están solo en la nube (OneDrive y similares) y no ocupan espacio local. */
+  cloud: number;
+  cloudFiles: number;
+  /** Archivo no descargado: está solo en la nube. */
+  cloudOnly: boolean;
   files: number;
   dirs: number;
   modified: number;

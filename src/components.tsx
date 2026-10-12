@@ -54,6 +54,27 @@ export function NodeIcon({ node, px = 18 }: { node: Pick<NodeInfo, "isDir" | "ca
   );
 }
 
+export function CloudIcon({ px = 14 }: { px?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={px} height={px} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 9.2 4.5 4.5 0 0 0 7 18z" />
+    </svg>
+  );
+}
+
+/** Aviso de cuánto de una carpeta o archivo está solo en la nube. */
+export function CloudNote({ node }: { node: { isDir: boolean; cloud: number; cloudFiles: number; cloudOnly: boolean; logical: number } }) {
+  if (node.cloud <= 0) return null;
+  return (
+    <p className="cloud-note">
+      <CloudIcon />
+      {node.cloudOnly
+        ? <>Está solo en la nube: pesa {size(node.logical)}, pero no ocupa espacio en tu disco.</>
+        : <>Además hay {size(node.cloud)} en {node.cloudFiles.toLocaleString("es-ES")} archivos que están solo en la nube y no ocupan espacio en tu disco.</>}
+    </p>
+  );
+}
+
 interface Rect<T> { item: T; x: number; y: number; w: number; h: number }
 
 /** Distribución "squarified": bloques lo más cuadrados posible, proporcionales al tamaño. */

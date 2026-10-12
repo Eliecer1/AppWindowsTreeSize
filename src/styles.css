@@ -154,6 +154,14 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .details p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 .confirm { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
 
+/* Nube */
+.cloud { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.row .sz.cloud { color: var(--accent); }
+.stat.cloud { display: block; }
+.stat.cloud small { display: flex; align-items: center; gap: 4px; color: var(--accent); }
+.cloud-note { display: flex; align-items: center; gap: 6px; color: var(--accent) !important; font-size: 13px; }
+.cloud-note svg { flex: none; }
+
 /* Limpiar */
 .clean { display: grid; grid-template-columns: 1fr 300px; gap: 12px; align-items: start; }
 .group h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }

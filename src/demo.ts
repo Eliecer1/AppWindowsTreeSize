@@ -48,6 +48,10 @@ const extOf = (n: string) => {
 function cDrive(): Spec {
   return D("C:\\",
     D("Users", D("Eliecer",
+      D("OneDrive",
+        D("Fotos", gen(900, 96 * GB, (i) => `IMG_${pad(1000 + i, 4)}.jpg`)),
+        D("Videos familiares", gen(70, 84 * GB, (i) => `Video ${pad(i + 1, 3)}.mp4`)),
+        D("Documentos", gen(300, 6 * GB, (i) => [`Informe ${i}.pdf`, `Hoja ${i}.xlsx`, `Carta ${i}.docx`][i % 3]))),
       D("Videos",
         D("Grabaciones OBS", gen(42, 141 * GB, (i) => `2025-${pad(1 + (i % 9))}-${pad(1 + (i % 27))} 21-${pad(i)}-03.mkv`)),
         D("Vacaciones 2025", gen(60, 58 * GB, (i) => `VID_202507${pad(1 + Math.floor(i / 4))}_${hex(6)}.mp4`)),
@@ -103,6 +107,9 @@ interface Entry {
   parent: number;
   isDir: boolean;
   size: number;
+  logical: number;
+  cloud: number;
+  cloudFiles: number;
   files: number;
   dirs: number;
   modified: number;
@@ -115,27 +122,36 @@ interface Entry {
 class DemoTree {
   entries: Entry[] = [];
   constructor(spec: Spec) {
-    this.add(spec, -1, false);
+    this.add(spec, -1, false, false);
   }
-  private add(s: Spec, parent: number, cache: boolean): number {
+  private add(s: Spec, parent: number, cache: boolean, inCloud: boolean): number {
     const id = this.entries.length;
     const isCache = cache || ["Temp", "Cache", "npm-cache", "DXCache"].includes(s.n);
-    const e: Entry = { name: s.n, parent, isDir: !!s.ch, size: 0, files: 0, dirs: 0, modified: 0, category: "other", byCat: {}, children: [] };
+    const isCloud = inCloud || s.n === "OneDrive";
+    const e: Entry = { name: s.n, parent, isDir: !!s.ch, size: 0, logical: 0, cloud: 0, cloudFiles: 0, files: 0, dirs: 0, modified: 0, category: "other", byCat: {}, children: [] };
     this.entries.push(e);
     if (!s.ch) {
-      e.size = Math.round(s.s ?? 0);
+      e.logical = Math.round(s.s ?? 0);
+      // En OneDrive, la mayoría de los archivos están "solo en línea": no ocupan espacio local.
+      const cloudOnly = isCloud && rnd() < 0.8;
+      e.size = cloudOnly ? 0 : e.logical;
+      e.cloud = cloudOnly ? e.logical : 0;
+      e.cloudFiles = cloudOnly ? 1 : 0;
       e.files = 1;
       e.modified = Math.round(T0 + rnd() * (T1 - T0));
       e.category = s.c ?? (isCache ? "cache" : EXT[extOf(s.n)] ?? "other");
       e.byCat = { [e.category]: e.size };
       return id;
     }
-    const kids = s.ch.map((c) => this.add(c, id, isCache));
+    const kids = s.ch.map((c) => this.add(c, id, isCache, isCloud));
     kids.sort((a, b) => this.entries[b].size - this.entries[a].size);
     e.children = kids;
     for (const k of kids) {
       const c = this.entries[k];
       e.size += c.size;
+      e.logical += c.logical;
+      e.cloud += c.cloud;
+      e.cloudFiles += c.cloudFiles;
       e.files += c.files;
       e.dirs += c.isDir ? 1 + c.dirs : 0;
       e.modified = Math.max(e.modified, c.modified);
@@ -152,7 +168,8 @@ class DemoTree {
   info(id: number): NodeInfo {
     const e = this.entries[id];
     return {
-      id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: e.size, files: e.files, dirs: e.dirs,
+      id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: e.size, logical: e.logical, cloud: e.cloud, cloudFiles: e.cloudFiles,
+      cloudOnly: !e.isDir && e.cloudFiles === 1, files: e.files, dirs: e.dirs,
       modified: e.modified, ext: e.isDir ? "" : extOf(e.name), category: e.category,
       hasChildren: e.children.some((c) => this.entries[c].isDir),
     };
@@ -174,6 +191,9 @@ class DemoTree {
     for (let cur = e.parent; cur >= 0; cur = this.entries[cur].parent) {
       const a = this.entries[cur];
       a.size -= e.size;
+      a.logical -= e.logical;
+      a.cloud -= e.cloud;
+      a.cloudFiles -= e.cloudFiles;
       a.files -= e.files;
       a.dirs -= e.isDir ? 1 + e.dirs : 0;
       for (const [cat, v] of Object.entries(e.byCat)) a.byCat[cat as Category] = (a.byCat[cat as Category] ?? 0) - (v ?? 0);

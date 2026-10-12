@@ -5,8 +5,10 @@
 //! el árbol completo, solo los hijos de la carpeta que se está viendo.
 
 mod category;
+mod disk;
 
 pub use category::{extension, Category, Context};
+pub use disk::{FileStat, Volume};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -43,7 +45,14 @@ pub struct Entry {
     pub name: Box<str>,
     pub parent: NodeId,
     pub is_dir: bool,
+    /// Espacio que ocupa realmente en el disco. Es el tamaño con el que se ordena y se dibuja todo.
     pub size: u64,
+    /// Tamaño que muestra el Explorador de Windows.
+    pub logical: u64,
+    /// Bytes que están solo en la nube (OneDrive y similares) y no ocupan espacio local.
+    pub cloud: u64,
+    /// Archivos contenidos que son marcadores de posición de la nube.
+    pub cloud_files: u64,
     /// Archivos contenidos (1 para un archivo).
     pub files: u64,
     /// Subcarpetas contenidas a cualquier profundidad.
@@ -68,6 +77,9 @@ struct Tmp {
     name: String,
     is_dir: bool,
     size: u64,
+    logical: u64,
+    cloud: u64,
+    cloud_files: u64,
     modified: i64,
     category: Category,
     children: Vec<Tmp>,
@@ -81,7 +93,7 @@ fn modified_secs(meta: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-fn walk(path: &Path, name: String, ctx: Context, progress: &Progress) -> Tmp {
+fn walk(path: &Path, name: String, ctx: Context, vol: &Volume, progress: &Progress) -> Tmp {
     progress.dirs.fetch_add(1, Ordering::Relaxed);
     let mut files = Vec::new();
     let mut subdirs = Vec::new();
@@ -104,15 +116,18 @@ fn walk(path: &Path, name: String, ctx: Context, progress: &Progress) -> Tmp {
                     if ft.is_dir() {
                         subdirs.push((entry.path(), name));
                     } else {
-                        let size = meta.len();
+                        let st = disk::stat(&entry.path(), &meta, vol);
                         progress.files.fetch_add(1, Ordering::Relaxed);
-                        progress.bytes.fetch_add(size, Ordering::Relaxed);
+                        progress.bytes.fetch_add(st.allocated, Ordering::Relaxed);
                         let ext = extension(&name);
                         files.push(Tmp {
                             category: ctx.categorize(&ext),
                             name,
                             is_dir: false,
-                            size,
+                            size: st.allocated,
+                            logical: st.logical,
+                            cloud: if st.cloud { st.logical.saturating_sub(st.allocated) } else { 0 },
+                            cloud_files: st.cloud as u64,
                             modified: modified_secs(&meta),
                             children: Vec::new(),
                         });
@@ -129,20 +144,24 @@ fn walk(path: &Path, name: String, ctx: Context, progress: &Progress) -> Tmp {
         .into_par_iter()
         .map(|(p, n)| {
             let child_ctx = ctx.enter(&n);
-            walk(&p, n, child_ctx, progress)
+            walk(&p, n, child_ctx, vol, progress)
         })
         .collect();
     children.append(&mut files);
 
     let size = children.iter().map(|c| c.size).sum();
+    let logical = children.iter().map(|c| c.logical).sum();
+    let cloud = children.iter().map(|c| c.cloud).sum();
+    let cloud_files = children.iter().map(|c| c.cloud_files).sum();
     let modified = children.iter().map(|c| c.modified).max().unwrap_or(0);
-    Tmp { name, is_dir: true, size, modified, category: Category::Other, children }
+    Tmp { name, is_dir: true, size, logical, cloud, cloud_files, modified, category: Category::Other, children }
 }
 
 /// Escanea `root` y devuelve el árbol completo. Si se cancela, devuelve lo leído hasta ese momento.
 pub fn scan(root: &Path, progress: &Progress) -> Tree {
     let root_name = root.to_string_lossy().into_owned();
-    let tmp = walk(root, root_name, Context::default(), progress);
+    let vol = Volume::of(root);
+    let tmp = walk(root, root_name, Context::default(), &vol, progress);
     let mut entries = Vec::with_capacity(
         (progress.files.load(Ordering::Relaxed) + progress.dirs.load(Ordering::Relaxed)) as usize,
     );
@@ -158,6 +177,9 @@ fn flatten(tmp: Tmp, parent: NodeId, out: &mut Vec<Entry>) -> NodeId {
         parent,
         is_dir: tmp.is_dir,
         size: tmp.size,
+        logical: tmp.logical,
+        cloud: tmp.cloud,
+        cloud_files: tmp.cloud_files,
         files: if tmp.is_dir { 0 } else { 1 },
         dirs: 0,
         modified: tmp.modified,
@@ -216,7 +238,15 @@ pub struct NodeInfo {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// Espacio real en disco.
     pub size: u64,
+    /// Tamaño que muestra el Explorador.
+    pub logical: u64,
+    /// Bytes que están solo en la nube.
+    pub cloud: u64,
+    pub cloud_files: u64,
+    /// Archivo que no está descargado: está en la nube y no ocupa espacio local.
+    pub cloud_only: bool,
     pub files: u64,
     pub dirs: u64,
     pub modified: i64,
@@ -276,6 +306,10 @@ impl Tree {
             path: self.path_of(id).to_string_lossy().into_owned(),
             is_dir: e.is_dir,
             size: e.size,
+            logical: e.logical,
+            cloud: e.cloud,
+            cloud_files: e.cloud_files,
+            cloud_only: !e.is_dir && e.cloud_files == 1,
             files: e.files,
             dirs: e.dirs,
             modified: e.modified,
@@ -394,6 +428,9 @@ impl Tree {
         while cur != NO_PARENT {
             let a = &mut self.entries[cur as usize];
             a.size = a.size.saturating_sub(e.size);
+            a.logical = a.logical.saturating_sub(e.logical);
+            a.cloud = a.cloud.saturating_sub(e.cloud);
+            a.cloud_files = a.cloud_files.saturating_sub(e.cloud_files);
             a.files = a.files.saturating_sub(e.files);
             a.dirs = a.dirs.saturating_sub(if e.is_dir { 1 + e.dirs } else { 0 });
             if let Some(b) = a.by_category.as_mut() {
@@ -424,9 +461,9 @@ mod tests {
     fn sample() -> (tempfile::TempDir, Tree) {
         let dir = tempfile::tempdir().unwrap();
         let r = dir.path();
-        write(&r.join("Videos/vacaciones.mp4"), 5000);
-        write(&r.join("Videos/clip.MKV"), 3000);
-        write(&r.join("Descargas/win11.iso"), 4000);
+        write(&r.join("Videos/vacaciones.mp4"), 50_000);
+        write(&r.join("Videos/clip.MKV"), 30_000);
+        write(&r.join("Descargas/win11.iso"), 40_000);
         write(&r.join("Descargas/notas.txt"), 10);
         write(&r.join("AppData/Local/Temp/a.png"), 700);
         write(&r.join("proyecto/node_modules/react/index.js"), 300);
@@ -441,13 +478,15 @@ mod tests {
     fn sums_sizes_and_counts() {
         let (_d, t) = sample();
         let root = t.info(Tree::ROOT).unwrap();
-        assert_eq!(root.size, 5000 + 3000 + 4000 + 10 + 700 + 300 + 1);
+        assert_eq!(root.logical, 50_000 + 30_000 + 40_000 + 10 + 700 + 300 + 1);
+        // Cada archivo ocupa al menos un bloque completo en disco.
+        assert!(root.size >= root.logical);
         assert_eq!(root.files, 7);
         assert_eq!(root.dirs, 8);
         let kids = t.children(Tree::ROOT, 0, 100);
         let names: Vec<_> = kids.iter().map(|k| k.name.as_str()).collect();
         assert_eq!(names, ["Videos", "Descargas", "AppData", "proyecto", "raiz.bin"]);
-        assert_eq!(kids[0].size, 8000);
+        assert_eq!(kids[0].logical, 80_000);
         assert_eq!(kids[0].category, Category::Video);
     }
 
@@ -461,7 +500,7 @@ mod tests {
         assert_eq!(t.info(js).unwrap().category, Category::Code);
         let cats = t.categories(Tree::ROOT);
         assert_eq!(cats[0].category, Category::Video);
-        assert_eq!(cats[0].size, 8000);
+        assert_eq!(cats[0].size, t.info(t.find(Path::new("Videos")).unwrap()).unwrap().size);
     }
 
     #[test]
@@ -484,13 +523,32 @@ mod tests {
     }
 
     #[test]
+    fn sparse_files_count_disk_space_not_apparent_size() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("lleno.bin"), 1 << 20);
+        // Un archivo disperso aparenta 64 MB pero casi no ocupa espacio en disco.
+        fs::File::create(dir.path().join("disperso.bin")).unwrap().set_len(64 << 20).unwrap();
+        let t = scan(dir.path(), &Progress::default());
+        let sparse = t.info(t.find(Path::new("disperso.bin")).unwrap()).unwrap();
+        let full = t.info(t.find(Path::new("lleno.bin")).unwrap()).unwrap();
+        assert_eq!(sparse.logical, 64 << 20);
+        assert!(sparse.size < 1 << 20, "ocupa {}", sparse.size);
+        assert!(full.size >= 1 << 20);
+        assert!(!sparse.cloud_only);
+        // Ordenado por espacio real: el archivo lleno va primero aunque aparente pesar menos.
+        assert_eq!(t.children(Tree::ROOT, 0, 2)[0].name, "lleno.bin");
+    }
+
+    #[test]
     fn remove_updates_ancestors() {
         let (_d, mut t) = sample();
-        let before = t.info(Tree::ROOT).unwrap().size;
+        let before = t.info(Tree::ROOT).unwrap();
         let id = t.find(Path::new("Descargas")).unwrap();
-        assert_eq!(t.remove(id), Some(4010));
+        let dl = t.info(id).unwrap();
+        assert_eq!(t.remove(id), Some(dl.size));
         let root = t.info(Tree::ROOT).unwrap();
-        assert_eq!(root.size, before - 4010);
+        assert_eq!(root.size, before.size - dl.size);
+        assert_eq!(root.logical, before.logical - 40_010);
         assert_eq!(root.files, 5);
         assert!(t.find(Path::new("Descargas")).is_none());
         assert!(t.categories(Tree::ROOT).iter().all(|c| c.category != Category::Archive));
