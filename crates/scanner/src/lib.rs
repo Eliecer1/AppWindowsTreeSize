@@ -15,6 +15,7 @@ use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::RwLock;
 use std::time::UNIX_EPOCH;
 
 pub type NodeId = u32;
@@ -66,23 +67,33 @@ pub struct Entry {
     pub children: Vec<NodeId>,
 }
 
-/// Resultado de un escaneo.
+/// Resultado de un escaneo. Se va llenando mientras el escaneo avanza, así que se puede consultar
+/// (detrás de un `RwLock`) antes de que termine.
 pub struct Tree {
     root_path: PathBuf,
     entries: Vec<Entry>,
+    /// Hay un escaneo escribiendo en el árbol: los hijos todavía no están ordenados.
+    live: bool,
 }
 
-/// Carpeta intermedia que se construye en paralelo antes de aplanarla.
-struct Tmp {
-    name: String,
-    is_dir: bool,
-    size: u64,
-    logical: u64,
-    cloud: u64,
-    cloud_files: u64,
-    modified: i64,
-    category: Category,
-    children: Vec<Tmp>,
+impl Entry {
+    fn dir(name: Box<str>, parent: NodeId) -> Self {
+        Entry {
+            name,
+            parent,
+            is_dir: true,
+            size: 0,
+            logical: 0,
+            cloud: 0,
+            cloud_files: 0,
+            files: 0,
+            dirs: 0,
+            modified: 0,
+            category: Category::Other,
+            by_category: Some(Box::new([0; 9])),
+            children: Vec::new(),
+        }
+    }
 }
 
 fn modified_secs(meta: &fs::Metadata) -> i64 {
@@ -93,139 +104,114 @@ fn modified_secs(meta: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-fn walk(path: &Path, name: String, ctx: Context, vol: &Volume, progress: &Progress) -> Tmp {
-    progress.dirs.fetch_add(1, Ordering::Relaxed);
-    let mut files = Vec::new();
-    let mut subdirs = Vec::new();
-
-    if !progress.is_cancelled() {
-        match fs::read_dir(path) {
-            Ok(rd) => {
-                for entry in rd.flatten() {
-                    // `DirEntry::metadata` no sigue enlaces simbólicos ni uniones (junctions),
-                    // así que no contamos dos veces carpetas como "Documents and Settings".
-                    let Ok(meta) = entry.metadata() else {
-                        progress.errors.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    };
-                    let ft = meta.file_type();
-                    if ft.is_symlink() {
-                        continue;
-                    }
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if ft.is_dir() {
-                        subdirs.push((entry.path(), name));
-                    } else {
-                        let st = disk::stat(&entry.path(), &meta, vol);
-                        progress.files.fetch_add(1, Ordering::Relaxed);
-                        progress.bytes.fetch_add(st.allocated, Ordering::Relaxed);
-                        let ext = extension(&name);
-                        files.push(Tmp {
-                            category: ctx.categorize(&ext),
-                            name,
-                            is_dir: false,
-                            size: st.allocated,
-                            logical: st.logical,
-                            cloud: if st.cloud { st.logical.saturating_sub(st.allocated) } else { 0 },
-                            cloud_files: st.cloud as u64,
-                            modified: modified_secs(&meta),
-                            children: Vec::new(),
-                        });
-                    }
-                }
-            }
-            Err(_) => {
-                progress.errors.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    let mut children: Vec<Tmp> = subdirs
-        .into_par_iter()
-        .map(|(p, n)| {
-            let child_ctx = ctx.enter(&n);
-            walk(&p, n, child_ctx, vol, progress)
-        })
-        .collect();
-    children.append(&mut files);
-
-    let size = children.iter().map(|c| c.size).sum();
-    let logical = children.iter().map(|c| c.logical).sum();
-    let cloud = children.iter().map(|c| c.cloud).sum();
-    let cloud_files = children.iter().map(|c| c.cloud_files).sum();
-    let modified = children.iter().map(|c| c.modified).max().unwrap_or(0);
-    Tmp { name, is_dir: true, size, logical, cloud, cloud_files, modified, category: Category::Other, children }
-}
-
 /// Escanea `root` y devuelve el árbol completo. Si se cancela, devuelve lo leído hasta ese momento.
 pub fn scan(root: &Path, progress: &Progress) -> Tree {
-    let root_name = root.to_string_lossy().into_owned();
-    let vol = Volume::of(root);
-    let tmp = walk(root, root_name, Context::default(), &vol, progress);
-    let mut entries = Vec::with_capacity(
-        (progress.files.load(Ordering::Relaxed) + progress.dirs.load(Ordering::Relaxed)) as usize,
-    );
-    flatten(tmp, NO_PARENT, &mut entries);
-    Tree { root_path: root.to_path_buf(), entries }
+    let tree = RwLock::new(Tree::new(root));
+    scan_into(&tree, progress);
+    tree.into_inner().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Copia el árbol temporal a un vector plano y calcula los totales de cada carpeta.
-fn flatten(tmp: Tmp, parent: NodeId, out: &mut Vec<Entry>) -> NodeId {
-    let id = out.len() as NodeId;
-    out.push(Entry {
-        name: tmp.name.into_boxed_str(),
-        parent,
-        is_dir: tmp.is_dir,
-        size: tmp.size,
-        logical: tmp.logical,
-        cloud: tmp.cloud,
-        cloud_files: tmp.cloud_files,
-        files: if tmp.is_dir { 0 } else { 1 },
-        dirs: 0,
-        modified: tmp.modified,
-        category: tmp.category,
-        by_category: None,
-        children: Vec::new(),
-    });
-    if !tmp.is_dir {
-        return id;
-    }
+/// Escanea la raíz de `tree` escribiendo en él a medida que avanza, para que se pueda explorar
+/// mientras tanto. Cada carpeta se agrega en cuanto se lee, y su tamaño se suma enseguida a las de arriba.
+pub fn scan_into(tree: &RwLock<Tree>, progress: &Progress) {
+    let root = write(tree).root_path.clone();
+    let vol = Volume::of(&root);
+    walk(tree, Tree::ROOT, &root, Context::default(), &vol, progress);
+    write(tree).finish(Tree::ROOT);
+}
 
-    let mut children = tmp.children;
-    children.sort_unstable_by(|a, b| b.size.cmp(&a.size));
-    let mut ids = Vec::with_capacity(children.len());
-    let mut files = 0;
-    let mut dirs = 0;
-    let mut by_cat = [0u64; 9];
-    for child in children {
-        let cid = flatten(child, id, out);
-        let c = &out[cid as usize];
-        files += c.files;
-        if c.is_dir {
-            dirs += 1 + c.dirs;
-            if let Some(b) = &c.by_category {
-                for (acc, v) in by_cat.iter_mut().zip(b.iter()) {
-                    *acc += v;
-                }
-            }
-        } else {
-            by_cat[c.category.index()] += c.size;
+/// Vuelve a leer del disco solo la carpeta `id` y actualiza los totales de las carpetas superiores.
+/// Mientras tanto el árbol se puede seguir consultando. La carpeta conserva su id.
+/// Devuelve `None` si ya no existe; en ese caso se quita del árbol.
+pub fn rescan(tree: &RwLock<Tree>, id: NodeId, progress: &Progress) -> Option<NodeId> {
+    let (path, ctx) = write(tree).begin_rescan(id)?;
+    let vol = Volume::of(&path);
+    walk(tree, id, &path, ctx, &vol, progress);
+    write(tree).finish(id);
+    Some(id)
+}
+
+fn write(tree: &RwLock<Tree>) -> std::sync::RwLockWriteGuard<'_, Tree> {
+    tree.write().unwrap_or_else(|e| e.into_inner())
+}
+
+fn walk(tree: &RwLock<Tree>, id: NodeId, path: &Path, ctx: Context, vol: &Volume, progress: &Progress) {
+    progress.dirs.fetch_add(1, Ordering::Relaxed);
+    if progress.is_cancelled() {
+        return;
+    }
+    let rd = match fs::read_dir(path) {
+        Ok(rd) => rd,
+        Err(_) => {
+            progress.errors.fetch_add(1, Ordering::Relaxed);
+            return;
         }
-        ids.push(cid);
+    };
+    let mut files = Vec::new();
+    let mut subdirs = Vec::new();
+    for entry in rd.flatten() {
+        // `DirEntry::metadata` no sigue enlaces simbólicos ni uniones (junctions),
+        // así que no contamos dos veces carpetas como "Documents and Settings".
+        let Ok(meta) = entry.metadata() else {
+            progress.errors.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ft.is_dir() {
+            subdirs.push((entry.path(), name));
+            continue;
+        }
+        let st = disk::stat(&entry.path(), &meta, vol);
+        progress.files.fetch_add(1, Ordering::Relaxed);
+        progress.bytes.fetch_add(st.allocated, Ordering::Relaxed);
+        files.push(Entry {
+            category: ctx.categorize(&extension(&name)),
+            name: name.into_boxed_str(),
+            parent: id,
+            is_dir: false,
+            size: st.allocated,
+            logical: st.logical,
+            cloud: if st.cloud { st.logical.saturating_sub(st.allocated) } else { 0 },
+            cloud_files: st.cloud as u64,
+            files: 1,
+            dirs: 0,
+            modified: modified_secs(&meta),
+            by_category: None,
+            children: Vec::new(),
+        });
     }
-    let dominant = Category::ALL
-        .into_iter()
-        .max_by_key(|c| by_cat[c.index()])
-        .filter(|c| by_cat[c.index()] > 0)
-        .unwrap_or(Category::Other);
 
-    let e = &mut out[id as usize];
-    e.files = files;
-    e.dirs = dirs;
-    e.category = dominant;
-    e.by_category = Some(Box::new(by_cat));
-    e.children = ids;
-    id
+    // Un solo bloqueo por carpeta: se agregan sus archivos y subcarpetas y se suman a las de arriba.
+    let next: Vec<(NodeId, PathBuf, Context)> = {
+        let mut t = write(tree);
+        // La carpeta se borró o se volvió a escanear mientras tanto: lo leído ya no le corresponde.
+        if id != Tree::ROOT && t.entries[id as usize].parent == NO_PARENT {
+            return;
+        }
+        let mut added = Totals::default();
+        for f in files {
+            added.add(&f);
+            let fid = t.entries.len() as NodeId;
+            t.entries.push(f);
+            t.entries[id as usize].children.push(fid);
+        }
+        let mut next = Vec::with_capacity(subdirs.len());
+        for (p, name) in subdirs {
+            let cid = t.entries.len() as NodeId;
+            let child_ctx = ctx.enter(&name);
+            t.entries.push(Entry::dir(name.into_boxed_str(), id));
+            t.entries[id as usize].children.push(cid);
+            next.push((cid, p, child_ctx));
+        }
+        added.dirs = next.len() as u64;
+        t.apply(id, &added, true, false);
+        next
+    };
+    next.into_par_iter().for_each(|(cid, p, c)| walk(tree, cid, &p, c, vol, progress));
 }
 
 /// Vista de un nodo lista para enviar a la interfaz.
@@ -264,6 +250,20 @@ pub struct CategorySize {
 
 impl Tree {
     pub const ROOT: NodeId = 0;
+
+    /// Árbol vacío listo para que `scan_into` lo llene.
+    pub fn new(root: &Path) -> Tree {
+        Tree {
+            root_path: root.to_path_buf(),
+            entries: vec![Entry::dir(root.to_string_lossy().into(), NO_PARENT)],
+            live: true,
+        }
+    }
+
+    /// Todavía hay un escaneo escribiendo en el árbol.
+    pub fn is_live(&self) -> bool {
+        self.live
+    }
 
     pub fn root_path(&self) -> &Path {
         &self.root_path
@@ -321,9 +321,14 @@ impl Tree {
 
     /// Hijos de una carpeta, de mayor a menor, paginados.
     pub fn children(&self, id: NodeId, offset: usize, limit: usize) -> Vec<NodeInfo> {
-        self.entry(id)
-            .map(|e| e.children.iter().skip(offset).take(limit).filter_map(|c| self.info(*c)).collect())
-            .unwrap_or_default()
+        let Some(e) = self.entry(id) else { return Vec::new() };
+        if !self.live {
+            return e.children.iter().skip(offset).take(limit).filter_map(|c| self.info(*c)).collect();
+        }
+        // Durante el escaneo los tamaños cambian a cada momento: se ordena al consultar.
+        let mut kids = e.children.clone();
+        kids.sort_by(|a, b| self.order(*a, *b));
+        kids.into_iter().skip(offset).take(limit).filter_map(|c| self.info(c)).collect()
     }
 
     /// Cadena de ancestros desde la raíz hasta `id`, incluidos ambos.
@@ -366,6 +371,10 @@ impl Tree {
             } else {
                 files.push((e.size, cur));
             }
+        }
+        if files.len() > n && n > 0 {
+            files.select_nth_unstable_by(n - 1, |a, b| b.0.cmp(&a.0));
+            files.truncate(n);
         }
         files.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         files.into_iter().take(n).filter_map(|(_, i)| self.info(i)).collect()
@@ -418,28 +427,27 @@ impl Tree {
         }
         let (parent, size, totals) = (e.parent, e.size, Totals::of(e));
         self.entries[parent as usize].children.retain(|c| *c != id);
-        self.apply(parent, &totals, false);
+        self.apply(parent, &totals, false, !self.live);
         self.detach(id);
         Some(size)
     }
 
-    /// Vuelve a leer del disco solo la carpeta `id` y actualiza los totales de las carpetas superiores.
-    /// La carpeta conserva su id. Devuelve `None` si ya no existe; en ese caso se quita del árbol.
-    pub fn rescan(&mut self, id: NodeId, progress: &Progress) -> Option<NodeId> {
+    /// Prepara el árbol para volver a leer la carpeta `id`: descuenta lo que tenía y la deja vacía.
+    /// Devuelve la ruta y el contexto con que hay que recorrerla, o `None` si ya no existe.
+    fn begin_rescan(&mut self, id: NodeId) -> Option<(PathBuf, Context)> {
         let e = self.entry(id)?;
         if !e.is_dir || (id != Self::ROOT && e.parent == NO_PARENT) {
             return None;
         }
         if id == Self::ROOT {
-            *self = scan(&self.root_path.clone(), progress);
-            return Some(Self::ROOT);
+            *self = Tree::new(&self.root_path.clone());
+            return Some((self.root_path.clone(), Context::default()));
         }
         let path = self.path_of(id);
         if !path.is_dir() {
             self.remove(id);
             return None;
         }
-
         // Las carpetas de caché y de código se reconocen por sus ancestros, igual que en el escaneo completo.
         let mut chain = Vec::new();
         let mut cur = id;
@@ -448,39 +456,50 @@ impl Tree {
             cur = self.entries[cur as usize].parent;
         }
         let ctx = chain.iter().rev().fold(Context::default(), |c, n| c.enter(&self.entries[*n as usize].name));
-        let name = self.entries[id as usize].name.to_string();
-        let vol = Volume::of(&self.root_path);
-        let mut sub = Vec::new();
-        flatten(walk(&path, name, ctx, &vol, progress), NO_PARENT, &mut sub);
 
-        // Quita lo viejo de los totales y del árbol.
-        let parent = self.entries[id as usize].parent;
-        let old = Totals::of(&self.entries[id as usize]);
-        self.apply(parent, &old, false);
+        let e = &self.entries[id as usize];
+        let parent = e.parent;
+        let mut old = Totals::of(e);
+        old.dirs -= 1; // La carpeta en sí sigue existiendo.
+        self.apply(parent, &old, false, false);
         for c in std::mem::take(&mut self.entries[id as usize].children) {
             self.detach(c);
         }
-
-        // Copia lo nuevo: la carpeta vuelve a su id y su contenido va al final del vector.
-        let base = self.entries.len() as NodeId;
-        let map = |i: NodeId| if i == 0 { id } else { base + i - 1 };
-        let mut sub = sub.into_iter();
-        let mut top = sub.next()?;
-        top.parent = parent;
-        top.children.iter_mut().for_each(|c| *c = map(*c));
-        for mut e in sub {
-            e.parent = map(e.parent);
-            e.children.iter_mut().for_each(|c| *c = map(*c));
-            self.entries.push(e);
-        }
-        let new = Totals::of(&top);
-        self.entries[id as usize] = top;
-        self.apply(parent, &new, true);
-        Some(id)
+        let name = std::mem::take(&mut self.entries[id as usize].name);
+        self.entries[id as usize] = Entry::dir(name, parent);
+        self.live = true;
+        Some((path, ctx))
     }
 
-    /// Suma o resta los totales de un nodo en `start` y en todas sus carpetas superiores, y reordena.
-    fn apply(&mut self, start: NodeId, t: &Totals, add: bool) {
+    /// Ordena de mayor a menor los hijos de `id` (a cualquier profundidad) y de sus carpetas superiores.
+    fn finish(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            self.sort_children(cur);
+            stack.extend(self.entries[cur as usize].children.iter().filter(|c| self.entries[**c as usize].is_dir));
+        }
+        let mut cur = self.entries[id as usize].parent;
+        while cur != NO_PARENT {
+            self.sort_children(cur);
+            cur = self.entries[cur as usize].parent;
+        }
+        self.live = false;
+    }
+
+    fn sort_children(&mut self, id: NodeId) {
+        let mut kids = std::mem::take(&mut self.entries[id as usize].children);
+        kids.sort_by(|x, y| self.order(*x, *y));
+        self.entries[id as usize].children = kids;
+    }
+
+    /// Orden de los hijos: de mayor a menor; a igual tamaño, carpetas primero y luego por nombre.
+    fn order(&self, a: NodeId, b: NodeId) -> std::cmp::Ordering {
+        let (a, b) = (&self.entries[a as usize], &self.entries[b as usize]);
+        b.size.cmp(&a.size).then(b.is_dir.cmp(&a.is_dir)).then_with(|| a.name.cmp(&b.name))
+    }
+
+    /// Suma o resta unos totales en `start` y en todas sus carpetas superiores.
+    fn apply(&mut self, start: NodeId, t: &Totals, add: bool, resort: bool) {
         let f = |a: &mut u64, v: u64| *a = if add { *a + v } else { a.saturating_sub(v) };
         let mut cur = start;
         while cur != NO_PARENT {
@@ -504,11 +523,11 @@ impl Tree {
                     .filter(|c| b[c.index()] > 0)
                     .unwrap_or(Category::Other);
             }
-            let mut kids = std::mem::take(&mut self.entries[cur as usize].children);
-            kids.sort_by(|x, y| self.entries[*y as usize].size.cmp(&self.entries[*x as usize].size));
-            let a = &mut self.entries[cur as usize];
-            a.children = kids;
-            cur = a.parent;
+            let next = a.parent;
+            if resort {
+                self.sort_children(cur);
+            }
+            cur = next;
         }
     }
 
@@ -524,6 +543,7 @@ impl Tree {
 }
 
 /// Lo que un nodo aporta a los totales de sus carpetas superiores.
+#[derive(Default)]
 struct Totals {
     size: u64,
     logical: u64,
@@ -536,6 +556,17 @@ struct Totals {
 }
 
 impl Totals {
+    /// Suma un archivo.
+    fn add(&mut self, f: &Entry) {
+        self.size += f.size;
+        self.logical += f.logical;
+        self.cloud += f.cloud;
+        self.cloud_files += f.cloud_files;
+        self.files += 1;
+        self.modified = self.modified.max(f.modified);
+        self.cats[f.category.index()] += f.size;
+    }
+
     fn of(e: &Entry) -> Self {
         let cats = match &e.by_category {
             Some(b) => **b,
@@ -567,6 +598,13 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut f = fs::File::create(path).unwrap();
         f.write_all(&vec![0u8; bytes]).unwrap();
+    }
+
+    fn re(t: &mut Tree, id: NodeId) -> Option<NodeId> {
+        let lock = RwLock::new(std::mem::replace(t, Tree::new(Path::new(""))));
+        let r = rescan(&lock, id, &Progress::default());
+        *t = lock.into_inner().unwrap();
+        r
     }
 
     fn sample() -> (tempfile::TempDir, Tree) {
@@ -681,7 +719,7 @@ mod tests {
         // Un cambio fuera de la carpeta no se ve hasta refrescarla a ella.
         write(&d.path().join("Descargas/otro.zip"), 5_000);
 
-        assert_eq!(t.rescan(videos, &Progress::default()), Some(videos));
+        assert_eq!(re(&mut t, videos), Some(videos));
         let v = t.info(videos).unwrap();
         assert_eq!(v.logical, 50_000 + 200_000);
         assert_eq!((v.files, v.dirs), (2, 1));
@@ -702,7 +740,7 @@ mod tests {
         let (d, mut t) = sample();
         let local = t.find(Path::new("AppData/Local")).unwrap();
         write(&d.path().join("AppData/Local/Temp/b.png"), 900);
-        t.rescan(local, &Progress::default()).unwrap();
+        re(&mut t, local).unwrap();
         let png = t.find(Path::new("AppData/Local/Temp/b.png")).unwrap();
         assert_eq!(t.info(png).unwrap().category, Category::Cache);
 
@@ -710,8 +748,41 @@ mod tests {
         let dl = t.find(Path::new("Descargas")).unwrap();
         let dl_size = t.info(dl).unwrap().size;
         fs::remove_dir_all(d.path().join("Descargas")).unwrap();
-        assert_eq!(t.rescan(dl, &Progress::default()), None);
+        assert_eq!(re(&mut t, dl), None);
         assert_eq!(t.info(Tree::ROOT).unwrap().size, before.size - dl_size);
         assert!(t.search("win11", 10).is_empty());
+    }
+
+    #[test]
+    fn can_browse_while_scanning() {
+        let dir = tempfile::tempdir().unwrap();
+        for a in 0..40 {
+            for b in 0..10 {
+                write(&dir.path().join(format!("c{a}/d{b}/f.bin")), 1000 + a * 10 + b);
+            }
+        }
+        let tree = std::sync::Arc::new(RwLock::new(Tree::new(dir.path())));
+        let worker = {
+            let tree = tree.clone();
+            std::thread::spawn(move || scan_into(&tree, &Progress::default()))
+        };
+        let mut last = 0;
+        while !worker.is_finished() {
+            let t = tree.read().unwrap();
+            let root = t.info(Tree::ROOT).unwrap();
+            assert!(root.logical >= last, "el total nunca baja mientras se escanea");
+            last = root.logical;
+            let kids = t.children(Tree::ROOT, 0, 100);
+            assert!(kids.windows(2).all(|w| w[0].size >= w[1].size), "ordenados aunque el escaneo siga");
+            if let Some(k) = kids.first() {
+                t.children(k.id, 0, 100);
+            }
+        }
+        worker.join().unwrap();
+        let t = tree.read().unwrap();
+        assert!(!t.is_live());
+        let root = t.info(Tree::ROOT).unwrap();
+        assert_eq!((root.files, root.dirs), (400, 440));
+        assert_eq!(root.logical, (0..40).flat_map(|a| (0..10).map(move |b| 1000 + a * 10 + b)).sum::<u64>());
     }
 }

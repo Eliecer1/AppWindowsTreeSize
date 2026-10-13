@@ -12,6 +12,7 @@ function ScanStatus({ ctx, drive }: { ctx: Ctx; drive: Drive }) {
         <small className="muted">
           Leyendo archivos… <span className="num">{int(p.files)}</span> archivos, <span className="num">{size(p.bytes)}</span> · <span className="num">{seconds(p.elapsedMs)}</span>
         </small>
+        <small className="muted">Ya puedes explorar: las carpetas se van llenando mientras avanza.</small>
         <div className="progress"><i style={{ width: `${pct(p.bytes, drive.total - drive.available)}%` }} /></div>
       </div>
     );
@@ -45,7 +46,7 @@ export function Home({ ctx }: { ctx: Ctx }) {
       safe: s.filter((x) => x.risk === "safe").length,
       review: s.filter((x) => x.risk !== "safe").length,
     })).catch(() => {});
-  }, [api, primary?.root, primary?.scanned, version]);
+  }, [api, primary?.root, primary?.scanned, version, ctx.live]);
 
   if (!primary) {
     return <div className="view"><div className="card empty-state"><h3>Buscando discos…</h3></div></div>;

@@ -107,6 +107,9 @@ fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<()
         }
         *running = Some(progress.clone());
     }
+    // El árbol queda disponible desde ya y se va llenando: se puede explorar mientras se analiza.
+    let tree = Arc::new(RwLock::new(Tree::new(Path::new(&root))));
+    state.trees.lock().unwrap().insert(root.clone(), tree.clone());
 
     std::thread::spawn(move || {
         let started = Instant::now();
@@ -131,12 +134,11 @@ fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<()
             })
         };
 
-        let tree = scanner::scan(Path::new(&root), &progress);
+        scanner::scan_into(&tree, &progress);
         done.store(true, Ordering::Relaxed);
         let _ = ticker.join();
 
         let state = app.state::<AppState>();
-        state.trees.lock().unwrap().insert(root.clone(), Arc::new(RwLock::new(tree)));
         *state.running.lock().unwrap() = None;
         let _ = app.emit(
             "scan://done",
@@ -190,7 +192,7 @@ fn get_folder(root: String, id: NodeId, limit: usize, state: State<AppState>) ->
 #[tauri::command]
 async fn rescan_folder(root: String, id: NodeId, state: State<'_, AppState>) -> Result<Option<NodeId>, String> {
     let tree = state.tree(&root)?;
-    tauri::async_runtime::spawn_blocking(move || tree.write().unwrap().rescan(id, &Progress::default()))
+    tauri::async_runtime::spawn_blocking(move || scanner::rescan(&tree, id, &Progress::default()))
         .await
         .map_err(|e| e.to_string())
 }

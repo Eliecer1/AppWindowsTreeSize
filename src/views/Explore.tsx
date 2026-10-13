@@ -30,7 +30,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
       .then((f) => { if (live) { setFolder(f); setChildren(f.children); } })
       .catch(() => { if (live && folderId !== 0) setFolderId(0); });
     return () => { live = false; };
-  }, [api, root, folderId, version]);
+  }, [api, root, folderId, version, ctx.live]);
 
   if (!root) {
     return (
@@ -47,6 +47,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   if (!folder) return null;
 
   const n = folder.node;
+  const live = ctx.scanning?.root === root ? ctx.scanning : null;
   const shown = sel ?? n;
   const biggest = children[0]?.size || 1;
 
@@ -115,11 +116,17 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
           </span>
         ))}
       </nav>
+        {live ? (
+          <span className="live-chip" role="status">
+            <RefreshIcon spin /> Analizando… <span className="num">{int(live.files)}</span> archivos, <span className="num">{size(live.bytes)}</span>. Los tamaños se actualizan solos.
+          </span>
+        ) : (
         <button className="btn refresh" disabled={refreshing || !!ctx.scanning} onClick={refresh}
           title={n.id === 0 ? "Vuelve a analizar todo el disco" : "Vuelve a leer solo esta carpeta y lo que tiene dentro"}>
           <RefreshIcon spin={refreshing || !!ctx.scanning} />
           {refreshing ? "Refrescando…" : n.id === 0 ? "Analizar de nuevo" : "Refrescar carpeta"}
         </button>
+        )}
       </div>
 
       <div className="explore">
@@ -155,9 +162,9 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             </div>
             <div className="actions">
               <button className="btn" onClick={reveal}>Abrir en el Explorador</button>
-              {shown.id !== 0 && <button className="btn" onClick={() => setConfirm(true)}>Enviar a la papelera</button>}
+              {shown.id !== 0 && <button className="btn" disabled={!!live} title={live ? "Espera a que termine el análisis" : undefined} onClick={() => setConfirm(true)}>Enviar a la papelera</button>}
             </div>
-            {confirm && (
+            {confirm && !live && (
               <div className="confirm" style={{ gridColumn: "1 / -1" }}>
                 <b>¿Enviar {shown.name} a la papelera?</b>
                 <span>{shown.size > 0 ? `Se liberarán ${size(shown.size)}.` : "No liberará espacio en tu disco."} Podrás recuperarlo desde la papelera de reciclaje.</span>

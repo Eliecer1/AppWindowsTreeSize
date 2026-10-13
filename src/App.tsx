@@ -20,6 +20,8 @@ export interface Ctx {
   /** Sube cada vez que cambian los datos (análisis nuevo o algo enviado a la papelera). */
   version: number;
   bump: () => void;
+  /** Sube cada poco mientras hay un análisis en curso, para que las vistas muestren los tamaños en vivo. */
+  live: number;
   startScan: (root: string) => void;
   explore: (root: string, id?: number, select?: NodeInfo) => void;
   go: (v: View) => void;
@@ -50,6 +52,7 @@ export default function App() {
   const [scanning, setScanning] = useState<ScanProgress | null>(null);
   const [lastScan, setLastScan] = useState<Record<string, ScanDone>>({});
   const [version, setVersion] = useState(0);
+  const [live, setLive] = useState(0);
   const [target, setTarget] = useState<{ root: string; id: number; select?: NodeInfo; at: number } | null>(null);
   const [activeRoot, setActiveRoot] = useState<string | undefined>();
   const [msg, setMsg] = useState<{ text: string; error?: boolean; at: number } | null>(null);
@@ -81,6 +84,14 @@ export default function App() {
     return () => { subs.forEach((s) => s.then((off) => off())); };
   }, [api, refreshDrives, bump]);
 
+  // Mientras se analiza, el árbol ya se puede consultar y va creciendo: las vistas se refrescan solas.
+  const isScanning = scanning !== null;
+  useEffect(() => {
+    if (!isScanning) return;
+    const t = setInterval(() => setLive((n) => n + 1), 1200);
+    return () => clearInterval(t);
+  }, [isScanning]);
+
   const go = useCallback((v: View) => {
     setView(v);
     try { localStorage.setItem("awts-view", v); } catch { /* sin almacenamiento */ }
@@ -100,13 +111,15 @@ export default function App() {
   if (!api) return null;
 
   const ctx: Ctx = {
-    api, drives, primary, scanning, lastScan, version, bump, toast, go,
+    api, drives, primary, scanning, lastScan, version, bump, live, toast, go,
     activeRoot: root,
     setActiveRoot,
     startScan: async (r) => {
       try {
         setScanning({ root: r, files: 0, dirs: 0, bytes: 0, elapsedMs: 0 });
         await api.startScan(r);
+        setActiveRoot(r);
+        refreshDrives();
       } catch (e) { setScanning(null); toast(String(e), true); }
     },
     explore: (r, id = 0, select) => {

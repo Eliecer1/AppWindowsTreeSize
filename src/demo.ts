@@ -121,6 +121,8 @@ interface Entry {
 
 class DemoTree {
   entries: Entry[] = [];
+  /** Fracción ya "leída" mientras se simula un análisis: los tamaños crecen hasta llegar al total. */
+  scale = 1;
   constructor(spec: Spec) {
     this.add(spec, -1, false, false);
   }
@@ -167,9 +169,10 @@ class DemoTree {
   }
   info(id: number): NodeInfo {
     const e = this.entries[id];
+    const k = (v: number) => (e.isDir ? Math.round(v * this.scale) : v);
     return {
-      id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: e.size, logical: e.logical, cloud: e.cloud, cloudFiles: e.cloudFiles,
-      cloudOnly: !e.isDir && e.cloudFiles === 1, files: e.files, dirs: e.dirs,
+      id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: k(e.size), logical: k(e.logical), cloud: k(e.cloud), cloudFiles: k(e.cloudFiles),
+      cloudOnly: !e.isDir && e.cloudFiles === 1, files: k(e.files), dirs: k(e.dirs),
       modified: e.modified, ext: e.isDir ? "" : extOf(e.name), category: e.category,
       hasChildren: e.children.some((c) => this.entries[c].isDir),
     };
@@ -242,14 +245,20 @@ export function demoApi(): Api {
       const totalFiles = target.entries[0].files * 410;
       const totalBytes = target.entries[0].size;
       const started = performance.now();
+      // Como la app real, el árbol se puede explorar desde el primer momento y va creciendo.
+      target.scale = 0;
+      const previous = trees[root];
+      trees[root] = target;
       (async () => {
-        const dur = 2600;
+        const dur = 6000;
         for (;;) {
           const t = Math.min((performance.now() - started) / dur, 1);
+          target.scale = t;
           const p = { root, files: Math.round(totalFiles * t), dirs: Math.round(target.entries[0].dirs * 90 * t), bytes: Math.round(totalBytes * t), elapsedMs: performance.now() - started };
           progressCbs.forEach((cb) => cb(p));
           if (t >= 1 || cancelled) {
-            if (!cancelled) trees[root] = target;
+            if (cancelled && previous) trees[root] = previous;
+            else target.scale = 1;
             doneCbs.forEach((cb) => cb({ ...p, errors: 0, cancelled }));
             return;
           }

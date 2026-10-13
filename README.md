@@ -4,6 +4,7 @@ App de escritorio para Windows que analiza tus discos, te muestra qué ocupa esp
 
 ## Qué hace
 
+- **Mientras analiza** ya puedes entrar en Explorar: las carpetas y archivos aparecen en cuanto se leen y los tamaños crecen en vivo.
 - **Inicio**: uso de cada disco, cuánto puedes liberar, qué tipos de archivo ocupan más y los archivos más pesados.
 - **Explorar**: mapa de bloques de cada carpeta. Haz clic en un bloque para entrar. El botón **Refrescar carpeta** vuelve a leer solo la carpeta que estás viendo y actualiza los totales de las de arriba. Desde cada elemento puedes abrir el Explorador de Windows o enviarlo a la papelera.
 - **Limpiar**: sugerencias clasificadas por riesgo (temporales, Windows.old, Windows Update, cachés de navegadores, npm, pip y sombreadores, ISOs e instaladores en Descargas, `node_modules`, hibernación, papelera). Todo va a la papelera de reciclaje, así que se puede recuperar.

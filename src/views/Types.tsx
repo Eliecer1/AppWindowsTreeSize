@@ -11,7 +11,7 @@ export function Types({ ctx }: { ctx: Ctx }) {
 
   useEffect(() => {
     if (root) api.getFolder(root, 0, 0).then((f) => setCats(f.categories)).catch(() => {});
-  }, [api, root, version]);
+  }, [api, root, version, ctx.live]);
 
   if (!root) {
     return (
