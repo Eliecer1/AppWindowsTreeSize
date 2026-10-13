@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
-import { CloudIcon, CloudNote, NodeIcon, RefreshIcon, StackBar, Treemap } from "../components";
+import { CloudIcon, CloudNote, FileStatus, NodeIcon, RefreshIcon, StackBar, Treemap } from "../components";
 import { CATEGORY, date, driveLetter, fmtPct, int, pct, size } from "../format";
 import type { FolderView, NodeInfo } from "../types";
 
@@ -50,6 +50,8 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   const live = ctx.scanning?.root === root ? ctx.scanning : null;
   const shown = sel ?? n;
   const biggest = children[0]?.size || 1;
+  // En cuanto la carpeta tiene archivos, la lista gana una columna que dice dónde está cada uno.
+  const hasFiles = children.some((c) => !c.isDir);
 
   const open = (c: NodeInfo) => {
     setConfirm(false);
@@ -130,14 +132,20 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
       </div>
 
       <div className="explore">
-        <div className="card list" role="list">
+        <div className={`card list ${hasFiles ? "with-status" : ""}`} role="list">
           {children.length === 0 && <p className="muted" style={{ padding: 10 }}>Esta carpeta está vacía.</p>}
+          {hasFiles && (
+            <div className="row head-row" aria-hidden="true">
+              <span style={{ width: 16 }} /><span>Nombre</span><span>Estado</span><span>Tamaño</span>
+            </div>
+          )}
           {children.map((c) => (
             <button key={c.id} role="listitem" className={`row ${sel?.id === c.id ? "sel" : ""}`} onClick={() => open(c)} title={c.path}>
               <NodeIcon node={c} px={16} />
               <span className="nm">{c.name}{!c.isDir && c.ext && <small>.{c.ext}</small>}</span>
+              {hasFiles && <span className="st">{!c.isDir && <FileStatus node={c} />}</span>}
               {c.cloudOnly
-                ? <span className="sz cloud" title={`Pesa ${size(c.logical)}, pero está solo en la nube`}><CloudIcon /> {size(c.logical)}</span>
+                ? <span className="sz cloud" title={`Pesa ${size(c.logical)}, pero está solo en la nube`}>{size(c.logical)}</span>
                 : <span className="sz">{size(c.size)}{c.cloud > 0 && <span className="cloud" style={{ marginLeft: 5 }} title={`${size(c.cloud)} más están solo en la nube`}><CloudIcon px={12} /></span>}</span>}
               <span className="bar"><i style={{ width: `${(c.size / biggest) * 100}%`, background: CATEGORY[c.category].color }} /></span>
             </button>

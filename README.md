@@ -9,7 +9,7 @@ App de escritorio para Windows que analiza tus discos, te muestra qué ocupa esp
 - **Explorar**: mapa de bloques de cada carpeta. Haz clic en un bloque para entrar. El botón **Refrescar carpeta** vuelve a leer solo la carpeta que estás viendo y actualiza los totales de las de arriba. Desde cada elemento puedes abrir el Explorador de Windows o enviarlo a la papelera.
 - **Limpiar**: sugerencias clasificadas por riesgo (temporales, Windows.old, Windows Update, cachés de navegadores, npm, pip y sombreadores, ISOs e instaladores en Descargas, `node_modules`, hibernación, papelera). Todo va a la papelera de reciclaje, así que se puede recuperar.
 - **Tipos de archivo**: cuánto ocupa cada tipo en el disco.
-- **Nube**: mide lo que cada archivo ocupa de verdad en el disco. Los archivos de OneDrive que están solo en la nube se marcan con una nube y no cuentan como espacio usado.
+- **Nube**: mide lo que cada archivo ocupa de verdad en el disco. En las carpetas con archivos, la columna **Estado** dice si cada uno está "En el disco" o "En la nube". Los archivos de OneDrive que están solo en la nube se marcan con una nube y no cuentan como espacio usado.
 - **Ctrl+K**: busca por nombre, o por extensión escribiendo un punto (por ejemplo `.iso`).
 
 ## Cómo está hecho

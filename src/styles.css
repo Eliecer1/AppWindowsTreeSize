@@ -135,6 +135,7 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .crumbs button:last-child { color: var(--fg); font-weight: 600; }
 .crumbs .sep { color: var(--faint); }
 .explore { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 12px; }
+.explore:has(.list.with-status) { grid-template-columns: minmax(300px, 440px) 1fr; }
 .list { padding: 6px; display: flex; flex-direction: column; max-height: 600px; overflow: auto; }
 .row { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 10px; border-radius: 8px; border: 0; background: transparent; text-align: left; width: 100%; }
 .row:hover { background: var(--panel-2); }
@@ -164,6 +165,14 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 /* Nube */
 .cloud { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
 .row .sz.cloud { color: var(--accent); }
+.list.with-status .row { grid-template-columns: auto 1fr 96px 64px; }
+.list.with-status .row .sz, .list .row.head-row span:last-child { justify-self: end; white-space: nowrap; }
+.list .row.head-row { position: sticky; top: -6px; z-index: 1; background: var(--panel); padding-top: 4px; padding-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); cursor: default; border-bottom: 1px solid var(--line); border-radius: 0; }
+.list .row.head-row:hover { background: var(--panel); }
+.row .st { display: flex; }
+.chip.status { font-size: 11px; padding: 1px 7px; gap: 4px; }
+.chip.cloud-st { background: var(--accent-soft); color: var(--accent); }
+.chip.disk-st { background: var(--ok-soft); color: var(--ok); }
 .stat.cloud { display: block; }
 .stat.cloud small { display: flex; align-items: center; gap: 4px; color: var(--accent); }
 .cloud-note { display: flex; align-items: center; gap: 6px; color: var(--accent) !important; font-size: 13px; }
