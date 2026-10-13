@@ -336,6 +336,11 @@ export function demoApi(): Api {
       add("hibernation", "Archivo de hibernación", "Desactivar la hibernación libera hiberfil.sys, pero quita la opción Hibernar del menú de apagado.", "careful", [t.find("hiberfil.sys")], "Abre una terminal como administrador y ejecuta: powercfg /hibernate off");
       return out;
     },
+    async rescanFolder(root, id) {
+      tree(root);
+      await sleep(600);
+      return id;
+    },
     async openInExplorer() {},
     async moveToTrash(root, ids) {
       const t = tree(root);

@@ -11,6 +11,8 @@ export interface Api {
   onDone(cb: (d: ScanDone) => void): Promise<() => void>;
   getFolder(root: string, id: number, limit: number): Promise<FolderView>;
   getChildren(root: string, id: number, offset: number, limit: number): Promise<NodeInfo[]>;
+  /** Vuelve a leer una sola carpeta del disco. Devuelve null si ya no existe. */
+  rescanFolder(root: string, id: number): Promise<number | null>;
   largestFiles(root: string, id: number, limit: number): Promise<NodeInfo[]>;
   search(root: string, query: string, limit: number): Promise<NodeInfo[]>;
   cleanupSuggestions(root: string): Promise<Suggestion[]>;
@@ -32,6 +34,7 @@ async function tauriApi(): Promise<Api> {
     onDone: (cb) => listen<ScanDone>("scan://done", (e) => cb(e.payload)),
     getFolder: (root, id, limit) => invoke("get_folder", { root, id, limit }),
     getChildren: (root, id, offset, limit) => invoke("get_children", { root, id, offset, limit }),
+    rescanFolder: (root, id) => invoke("rescan_folder", { root, id }),
     largestFiles: (root, id, limit) => invoke("largest_files", { root, id, limit }),
     search: (root, query, limit) => invoke("search", { root, query, limit }),
     cleanupSuggestions: (root) => invoke("cleanup_suggestions", { root }),

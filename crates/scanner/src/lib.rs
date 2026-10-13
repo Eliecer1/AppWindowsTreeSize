@@ -383,6 +383,7 @@ impl Tree {
             .par_iter()
             .enumerate()
             .skip(1)
+            .filter(|(_, e)| e.parent != NO_PARENT)
             .filter(|(_, e)| match &by_ext {
                 Some(ext) => !e.is_dir && extension(&e.name) == *ext,
                 None => e.name.to_lowercase().contains(&q),
@@ -411,8 +412,132 @@ impl Tree {
         if id == Self::ROOT {
             return None;
         }
-        let e = self.entry(id)?.clone();
-        let removed_cats = match &e.by_category {
+        let e = self.entry(id)?;
+        if e.parent == NO_PARENT {
+            return None;
+        }
+        let (parent, size, totals) = (e.parent, e.size, Totals::of(e));
+        self.entries[parent as usize].children.retain(|c| *c != id);
+        self.apply(parent, &totals, false);
+        self.detach(id);
+        Some(size)
+    }
+
+    /// Vuelve a leer del disco solo la carpeta `id` y actualiza los totales de las carpetas superiores.
+    /// La carpeta conserva su id. Devuelve `None` si ya no existe; en ese caso se quita del árbol.
+    pub fn rescan(&mut self, id: NodeId, progress: &Progress) -> Option<NodeId> {
+        let e = self.entry(id)?;
+        if !e.is_dir || (id != Self::ROOT && e.parent == NO_PARENT) {
+            return None;
+        }
+        if id == Self::ROOT {
+            *self = scan(&self.root_path.clone(), progress);
+            return Some(Self::ROOT);
+        }
+        let path = self.path_of(id);
+        if !path.is_dir() {
+            self.remove(id);
+            return None;
+        }
+
+        // Las carpetas de caché y de código se reconocen por sus ancestros, igual que en el escaneo completo.
+        let mut chain = Vec::new();
+        let mut cur = id;
+        while cur != Self::ROOT {
+            chain.push(cur);
+            cur = self.entries[cur as usize].parent;
+        }
+        let ctx = chain.iter().rev().fold(Context::default(), |c, n| c.enter(&self.entries[*n as usize].name));
+        let name = self.entries[id as usize].name.to_string();
+        let vol = Volume::of(&self.root_path);
+        let mut sub = Vec::new();
+        flatten(walk(&path, name, ctx, &vol, progress), NO_PARENT, &mut sub);
+
+        // Quita lo viejo de los totales y del árbol.
+        let parent = self.entries[id as usize].parent;
+        let old = Totals::of(&self.entries[id as usize]);
+        self.apply(parent, &old, false);
+        for c in std::mem::take(&mut self.entries[id as usize].children) {
+            self.detach(c);
+        }
+
+        // Copia lo nuevo: la carpeta vuelve a su id y su contenido va al final del vector.
+        let base = self.entries.len() as NodeId;
+        let map = |i: NodeId| if i == 0 { id } else { base + i - 1 };
+        let mut sub = sub.into_iter();
+        let mut top = sub.next()?;
+        top.parent = parent;
+        top.children.iter_mut().for_each(|c| *c = map(*c));
+        for mut e in sub {
+            e.parent = map(e.parent);
+            e.children.iter_mut().for_each(|c| *c = map(*c));
+            self.entries.push(e);
+        }
+        let new = Totals::of(&top);
+        self.entries[id as usize] = top;
+        self.apply(parent, &new, true);
+        Some(id)
+    }
+
+    /// Suma o resta los totales de un nodo en `start` y en todas sus carpetas superiores, y reordena.
+    fn apply(&mut self, start: NodeId, t: &Totals, add: bool) {
+        let f = |a: &mut u64, v: u64| *a = if add { *a + v } else { a.saturating_sub(v) };
+        let mut cur = start;
+        while cur != NO_PARENT {
+            let a = &mut self.entries[cur as usize];
+            f(&mut a.size, t.size);
+            f(&mut a.logical, t.logical);
+            f(&mut a.cloud, t.cloud);
+            f(&mut a.cloud_files, t.cloud_files);
+            f(&mut a.files, t.files);
+            f(&mut a.dirs, t.dirs);
+            if add {
+                a.modified = a.modified.max(t.modified);
+            }
+            if let Some(b) = a.by_category.as_deref_mut() {
+                for (acc, v) in b.iter_mut().zip(t.cats.iter()) {
+                    f(acc, *v);
+                }
+                a.category = Category::ALL
+                    .into_iter()
+                    .max_by_key(|c| b[c.index()])
+                    .filter(|c| b[c.index()] > 0)
+                    .unwrap_or(Category::Other);
+            }
+            let mut kids = std::mem::take(&mut self.entries[cur as usize].children);
+            kids.sort_by(|x, y| self.entries[*y as usize].size.cmp(&self.entries[*x as usize].size));
+            let a = &mut self.entries[cur as usize];
+            a.children = kids;
+            cur = a.parent;
+        }
+    }
+
+    /// Marca un nodo y todo su contenido como fuera del árbol, para que la búsqueda no los encuentre.
+    fn detach(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let e = &mut self.entries[cur as usize];
+            e.parent = NO_PARENT;
+            stack.extend(std::mem::take(&mut e.children));
+        }
+    }
+}
+
+/// Lo que un nodo aporta a los totales de sus carpetas superiores.
+struct Totals {
+    size: u64,
+    logical: u64,
+    cloud: u64,
+    cloud_files: u64,
+    files: u64,
+    dirs: u64,
+    modified: i64,
+    cats: [u64; 9],
+}
+
+impl Totals {
+    fn of(e: &Entry) -> Self {
+        let cats = match &e.by_category {
             Some(b) => **b,
             None => {
                 let mut b = [0u64; 9];
@@ -420,30 +545,16 @@ impl Tree {
                 b
             }
         };
-        let parent = e.parent;
-        if let Some(p) = self.entries.get_mut(parent as usize) {
-            p.children.retain(|c| *c != id);
+        Totals {
+            size: e.size,
+            logical: e.logical,
+            cloud: e.cloud,
+            cloud_files: e.cloud_files,
+            files: e.files,
+            dirs: if e.is_dir { 1 + e.dirs } else { 0 },
+            modified: e.modified,
+            cats,
         }
-        let mut cur = parent;
-        while cur != NO_PARENT {
-            let a = &mut self.entries[cur as usize];
-            a.size = a.size.saturating_sub(e.size);
-            a.logical = a.logical.saturating_sub(e.logical);
-            a.cloud = a.cloud.saturating_sub(e.cloud);
-            a.cloud_files = a.cloud_files.saturating_sub(e.cloud_files);
-            a.files = a.files.saturating_sub(e.files);
-            a.dirs = a.dirs.saturating_sub(if e.is_dir { 1 + e.dirs } else { 0 });
-            if let Some(b) = a.by_category.as_mut() {
-                for (acc, v) in b.iter_mut().zip(removed_cats.iter()) {
-                    *acc = acc.saturating_sub(*v);
-                }
-            }
-            cur = a.parent;
-        }
-        // El nodo queda huérfano: nadie lo referencia y su tamaño ya no cuenta.
-        let gone = &mut self.entries[id as usize];
-        gone.parent = NO_PARENT;
-        Some(e.size)
     }
 }
 
@@ -557,5 +668,50 @@ mod tests {
         assert_eq!(root.files, 5);
         assert!(t.find(Path::new("Descargas")).is_none());
         assert!(t.categories(Tree::ROOT).iter().all(|c| c.category != Category::Archive));
+    }
+
+    #[test]
+    fn rescan_updates_only_that_folder_and_its_ancestors() {
+        let (d, mut t) = sample();
+        let before = t.info(Tree::ROOT).unwrap();
+        let videos = t.find(Path::new("Videos")).unwrap();
+        let old_videos = t.info(videos).unwrap();
+        fs::remove_file(d.path().join("Videos/clip.MKV")).unwrap();
+        write(&d.path().join("Videos/nuevos/fiesta.mp4"), 200_000);
+        // Un cambio fuera de la carpeta no se ve hasta refrescarla a ella.
+        write(&d.path().join("Descargas/otro.zip"), 5_000);
+
+        assert_eq!(t.rescan(videos, &Progress::default()), Some(videos));
+        let v = t.info(videos).unwrap();
+        assert_eq!(v.logical, 50_000 + 200_000);
+        assert_eq!((v.files, v.dirs), (2, 1));
+        let root = t.info(Tree::ROOT).unwrap();
+        assert_eq!(root.logical, before.logical - 30_000 + 200_000);
+        assert_eq!(root.size, before.size - old_videos.size + v.size);
+        assert_eq!((root.files, root.dirs), (before.files + 1 - 1, before.dirs + 1));
+        assert_eq!(t.find(Path::new("Videos/nuevos/fiesta.mp4")).map(|i| t.path_of(i)), Some(d.path().join("Videos/nuevos/fiesta.mp4")));
+        assert!(t.find(Path::new("Descargas/otro.zip")).is_none());
+        assert!(t.search("clip", 10).is_empty());
+        assert_eq!(t.search("fiesta", 10).len(), 1);
+        assert_eq!(t.children(Tree::ROOT, 0, 1)[0].id, videos);
+        assert_eq!(t.children(videos, 0, 1)[0].name, "nuevos");
+    }
+
+    #[test]
+    fn rescan_keeps_cache_context_and_handles_deleted_folders() {
+        let (d, mut t) = sample();
+        let local = t.find(Path::new("AppData/Local")).unwrap();
+        write(&d.path().join("AppData/Local/Temp/b.png"), 900);
+        t.rescan(local, &Progress::default()).unwrap();
+        let png = t.find(Path::new("AppData/Local/Temp/b.png")).unwrap();
+        assert_eq!(t.info(png).unwrap().category, Category::Cache);
+
+        let before = t.info(Tree::ROOT).unwrap();
+        let dl = t.find(Path::new("Descargas")).unwrap();
+        let dl_size = t.info(dl).unwrap().size;
+        fs::remove_dir_all(d.path().join("Descargas")).unwrap();
+        assert_eq!(t.rescan(dl, &Progress::default()), None);
+        assert_eq!(t.info(Tree::ROOT).unwrap().size, before.size - dl_size);
+        assert!(t.search("win11", 10).is_empty());
     }
 }

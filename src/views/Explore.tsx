@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
-import { CloudIcon, CloudNote, NodeIcon, StackBar, Treemap } from "../components";
+import { CloudIcon, CloudNote, NodeIcon, RefreshIcon, StackBar, Treemap } from "../components";
 import { CATEGORY, date, driveLetter, fmtPct, int, pct, size } from "../format";
 import type { FolderView, NodeInfo } from "../types";
 
@@ -15,6 +15,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   const [children, setChildren] = useState<NodeInfo[]>([]);
   const [sel, setSel] = useState<NodeInfo | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (!target) return;
@@ -69,6 +70,25 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
       ctx.bump();
     } catch (e) { ctx.toast(String(e), true); }
   };
+  const refresh = async () => {
+    setConfirm(false);
+    setSel(null);
+    // La raíz es el disco entero: eso es un análisis completo, con su barra de progreso.
+    if (n.id === 0) { ctx.startScan(root); return; }
+    setRefreshing(true);
+    try {
+      const id = await api.rescanFolder(root, n.id);
+      if (id === null) {
+        ctx.toast(`${n.name} ya no existe. Se quitó de la lista.`);
+        setFolderId(n.parent ?? 0);
+      } else {
+        const now = (await api.getFolder(root, id, 0)).node;
+        ctx.toast(now.size === n.size ? `${n.name} está al día: ${size(now.size)}.` : `${n.name} actualizada: antes ${size(n.size)}, ahora ${size(now.size)}.`);
+      }
+      ctx.bump();
+    } catch (e) { ctx.toast(String(e), true); }
+    finally { setRefreshing(false); }
+  };
   const loadMore = async () => {
     const more = await api.getChildren(root, n.id, children.length, PAGE);
     setChildren((c) => [...c, ...more]);
@@ -86,6 +106,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
         </div>
       </div>
 
+      <div className="crumbs-bar">
       <nav className="crumbs" aria-label="Ruta">
         {folder.ancestors.map((a, i) => (
           <span key={a.id} style={{ display: "contents" }}>
@@ -94,6 +115,12 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
           </span>
         ))}
       </nav>
+        <button className="btn refresh" disabled={refreshing || !!ctx.scanning} onClick={refresh}
+          title={n.id === 0 ? "Vuelve a analizar todo el disco" : "Vuelve a leer solo esta carpeta y lo que tiene dentro"}>
+          <RefreshIcon spin={refreshing || !!ctx.scanning} />
+          {refreshing ? "Refrescando…" : n.id === 0 ? "Analizar de nuevo" : "Refrescar carpeta"}
+        </button>
+      </div>
 
       <div className="explore">
         <div className="card list" role="list">

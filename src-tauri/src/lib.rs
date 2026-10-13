@@ -186,6 +186,15 @@ fn get_folder(root: String, id: NodeId, limit: usize, state: State<AppState>) ->
     })
 }
 
+/// Vuelve a leer del disco solo una carpeta. Devuelve `None` si la carpeta ya no existe.
+#[tauri::command]
+async fn rescan_folder(root: String, id: NodeId, state: State<'_, AppState>) -> Result<Option<NodeId>, String> {
+    let tree = state.tree(&root)?;
+    tauri::async_runtime::spawn_blocking(move || tree.write().unwrap().rescan(id, &Progress::default()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_children(root: String, id: NodeId, offset: usize, limit: usize, state: State<AppState>) -> Result<Vec<NodeInfo>, String> {
     Ok(state.tree(&root)?.read().unwrap().children(id, offset, limit))
@@ -264,6 +273,7 @@ pub fn run() {
             cancel_scan,
             get_folder,
             get_children,
+            rescan_folder,
             largest_files,
             search,
             cleanup_suggestions,

@@ -122,6 +122,11 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .empty-state p { margin: 0; color: var(--muted); max-width: 60ch; line-height: 1.5; }
 
 /* Explorar */
+.crumbs-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.btn.refresh { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; }
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 .crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .crumbs button { border: 0; background: transparent; padding: 4px 8px; border-radius: 6px; color: var(--muted); }
 .crumbs button:hover { background: var(--panel-2); color: var(--fg); }

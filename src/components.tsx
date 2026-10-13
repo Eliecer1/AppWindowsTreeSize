@@ -62,6 +62,17 @@ export function CloudIcon({ px = 14 }: { px?: number }) {
   );
 }
 
+export function RefreshIcon({ px = 15, spin = false }: { px?: number; spin?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width={px} height={px} aria-hidden="true" className={spin ? "spin" : undefined} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 11a8 8 0 0 0-14.6-4.5L4 8" />
+      <path d="M4 3.5V8h4.5" />
+      <path d="M4 13a8 8 0 0 0 14.6 4.5L20 16" />
+      <path d="M20 20.5V16h-4.5" />
+    </svg>
+  );
+}
+
 /** Aviso de cuánto de una carpeta o archivo está solo en la nube. */
 export function CloudNote({ node }: { node: { isDir: boolean; cloud: number; cloudFiles: number; cloudOnly: boolean; logical: number } }) {
   if (node.cloud <= 0) return null;
