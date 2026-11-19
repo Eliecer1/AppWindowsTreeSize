@@ -20,16 +20,33 @@ function ScanStatus({ ctx, drive }: { ctx: Ctx; drive: Drive }) {
   const done = ctx.lastScan[drive.root];
   if (done) {
     return (
-      <small className="muted">
-        {done.cancelled ? "Análisis cancelado" : "Analizado"} · <span className="num">{int(done.files)}</span> archivos en <span className="num">{seconds(done.elapsedMs)}</span>
-        {done.errors > 0 && <> · {int(done.errors)} carpetas sin permiso de lectura</>}
-      </small>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <small className="muted">
+          {done.cancelled ? "Análisis cancelado" : "Analizado"} · <span className="num">{int(done.files)}</span> archivos en <span className="num">{seconds(done.elapsedMs)}</span>
+          {done.fast && <> · <span className="chip ok" title="Se leyó la tabla de archivos de NTFS (MFT) directamente">Lectura rápida</span></>}
+          {done.errors > 0 && <> · {int(done.errors)} carpetas sin permiso de lectura</>}
+        </small>
+        {!ctx.isAdmin && !done.cancelled && <AdminHint ctx={ctx} errors={done.errors} />}
+      </div>
     );
   }
   if (drive.scanned && drive.scannedAt) {
     return <small className="muted">Análisis guardado del {dateTime(drive.scannedAt)}. Analiza de nuevo para ver los cambios.</small>;
   }
   return <small className="muted">{drive.scanned ? "Análisis listo." : "Todavía no se ha analizado este disco."}</small>;
+}
+
+/** Invita a reiniciar como administrador: el análisis lee la MFT directamente y entra en todas las carpetas. */
+function AdminHint({ ctx, errors }: { ctx: Ctx; errors: number }) {
+  return (
+    <div className="admin-hint">
+      <span>
+        {errors > 0 ? "Hay carpetas que no se pudieron leer. " : ""}
+        Como administrador el análisis es hasta 20 veces más rápido y entra en todas las carpetas.
+      </span>
+      <button className="btn small" onClick={ctx.restartAsAdmin}>Reiniciar como administrador</button>
+    </div>
+  );
 }
 
 export function Home({ ctx }: { ctx: Ctx }) {

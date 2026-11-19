@@ -29,6 +29,9 @@ export interface Ctx {
   toast: (text: string, error?: boolean) => void;
   activeRoot: string | undefined;
   setActiveRoot: (root: string) => void;
+  /** La app corre como administrador: el análisis de discos enteros lee la MFT directamente. */
+  isAdmin: boolean;
+  restartAsAdmin: () => void;
 }
 
 const NAV: { view: View; label: string; icon: ReactNode }[] = [
@@ -59,6 +62,7 @@ export default function App() {
   const [activeRoot, setActiveRoot] = useState<string | undefined>();
   const [msg, setMsg] = useState<{ text: string; error?: boolean; at: number } | null>(null);
   const [palette, setPalette] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const toast = useCallback((text: string, error = false) => setMsg({ text, error, at: Date.now() }), []);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -72,6 +76,7 @@ export default function App() {
 
   useEffect(() => {
     if (!api) return;
+    api.isAdmin().then(setIsAdmin).catch(() => {});
     refreshDrives();
     const subs = [
       api.onProgress((p) => setScanning(p)),
@@ -119,6 +124,8 @@ export default function App() {
     api, drives, primary, scanning, lastScan, version, bump, live, toast, go,
     activeRoot: root,
     setActiveRoot,
+    isAdmin,
+    restartAsAdmin: () => { api.restartAsAdmin().catch((e) => toast(String(e), true)); },
     startScan: async (r) => {
       try {
         setScanning({ root: r, files: 0, dirs: 0, bytes: 0, elapsedMs: 0 });

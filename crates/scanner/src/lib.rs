@@ -11,6 +11,7 @@
 mod category;
 mod diff;
 mod disk;
+pub mod mft;
 mod persist;
 
 pub use category::{extension, Category, Context};
@@ -42,6 +43,8 @@ pub struct Progress {
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
+    /// El escaneo usó la lectura directa de la MFT.
+    pub fast: AtomicBool,
     cancel: AtomicBool,
 }
 
@@ -128,6 +131,25 @@ pub fn scan(root: &Path, progress: &Progress) -> Tree {
 /// mientras tanto. Cada carpeta se agrega en cuanto se lee, y su tamaño se suma enseguida a las de arriba.
 pub fn scan_into(tree: &RwLock<Tree>, progress: &Progress) {
     let root = write(tree).root_path.clone();
+    // En la raíz de una unidad NTFS, con permisos de administrador, se lee la MFT de una vez.
+    match mft::try_scan(&root, progress) {
+        Ok(t) => {
+            progress.files.store(t.dirs[0].files, Ordering::Relaxed);
+            progress.dirs.store(t.dirs[0].dirs, Ordering::Relaxed);
+            progress.fast.store(true, Ordering::Relaxed);
+            *write(tree) = t;
+            return;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+            write(tree).finish(Tree::ROOT);
+            return;
+        }
+        Err(_) => {
+            progress.files.store(0, Ordering::Relaxed);
+            progress.dirs.store(0, Ordering::Relaxed);
+            progress.bytes.store(0, Ordering::Relaxed);
+        }
+    }
     let vol = Volume::of(&root);
     walk(tree, Tree::ROOT, &root, Context::default(), &vol, progress);
     write(tree).finish(Tree::ROOT);

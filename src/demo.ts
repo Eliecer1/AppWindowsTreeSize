@@ -378,6 +378,8 @@ export function demoApi(): Api {
         ]),
       };
     },
+    async isAdmin() { return false; },
+    async restartAsAdmin() { throw new Error("En la app de escritorio, aquí se vuelve a abrir como administrador."); },
     async locate(root, path) {
       const t = tree(root);
       const rel = path.startsWith(root) ? path.slice(root.length) : path;

@@ -64,6 +64,8 @@ export interface ScanProgress {
 export interface ScanDone extends ScanProgress {
   errors: number;
   cancelled: boolean;
+  /** Se leyó la tabla MFT directamente (análisis rápido como administrador). */
+  fast?: boolean;
 }
 
 export type Risk = "safe" | "review" | "careful";

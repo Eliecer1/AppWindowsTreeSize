@@ -11,6 +11,7 @@ rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
+flate2 = "1"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]

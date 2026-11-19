@@ -97,6 +97,8 @@ struct ScanDone {
     errors: u64,
     elapsed_ms: u64,
     cancelled: bool,
+    /// Se leyó la MFT directamente (análisis rápido como administrador).
+    fast: bool,
 }
 
 /// Inicia el escaneo en segundo plano. El avance llega como eventos `scan://progress`
@@ -160,6 +162,7 @@ fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<()
                 errors: progress.errors.load(Ordering::Relaxed),
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 cancelled: progress.is_cancelled(),
+                fast: progress.fast.load(Ordering::Relaxed),
             },
         );
     });
@@ -323,6 +326,47 @@ async fn move_to_trash(root: String, ids: Vec<NodeId>, app: AppHandle, state: St
     r
 }
 
+/// La app se está ejecutando como administrador.
+#[tauri::command]
+fn is_admin() -> bool {
+    #[cfg(windows)]
+    {
+        unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Vuelve a abrir la app como administrador (Windows pide confirmación) y cierra esta.
+#[tauri::command]
+fn restart_as_admin(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let wide = |s: &std::ffi::OsStr| s.encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let verb = wide(std::ffi::OsStr::new("runas"));
+        let file = wide(exe.as_os_str());
+        let r = unsafe {
+            ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+        };
+        if r as isize <= 32 {
+            return Err("No se pudo reiniciar como administrador (¿cancelaste el aviso de Windows?)".into());
+        }
+        app.exit(0);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("Solo disponible en Windows".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -345,6 +389,8 @@ pub fn run() {
             move_to_trash,
             get_changes,
             locate,
+            is_admin,
+            restart_as_admin,
         ])
         .run(tauri::generate_context!())
         .expect("no se pudo iniciar AppWindowsTreeSize");

@@ -26,6 +26,9 @@ export interface Api {
   getChanges(root: string): Promise<Changes | null>;
   /** Id de una ruta dentro del análisis, o null si ya no está. */
   locate(root: string, path: string): Promise<number | null>;
+  isAdmin(): Promise<boolean>;
+  /** Vuelve a abrir la app como administrador (Windows pide confirmación). */
+  restartAsAdmin(): Promise<void>;
 }
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -52,6 +55,8 @@ async function tauriApi(): Promise<Api> {
     onChanges: (cb) => listen<string>("scan://changes", (e) => cb(e.payload)),
     getChanges: (root) => invoke("get_changes", { root }),
     locate: (root, path) => invoke("locate", { root, path }),
+    isAdmin: () => invoke("is_admin"),
+    restartAsAdmin: () => invoke("restart_as_admin"),
   };
 }
 

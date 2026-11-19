@@ -243,3 +243,5 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .change-row .num { font-family: var(--f-num); font-size: 12px; white-space: nowrap; }
 .change-row .bar { grid-column: 1 / -1; }
 .btn.small { padding: 4px 10px; font-size: 12px; }
+.admin-hint { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12.5px; }
+.admin-hint span { flex: 1 1 220px; }

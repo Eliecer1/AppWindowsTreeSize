@@ -19,3 +19,6 @@ serde_json = "1"
 sysinfo = { version = "0.39", default-features = false, features = ["disk"] }
 trash = "5"
 scanner = { path = "../crates/scanner" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
