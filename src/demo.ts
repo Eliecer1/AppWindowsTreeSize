@@ -442,6 +442,8 @@ export function demoApi(): Api {
     async pickFolder() { return null; },
     async pickSavePath() { return null; },
     async isAdmin() { return false; },
+    async checkUpdate() { return null; },
+    async installUpdate() {},
     async restartAsAdmin() { throw new Error("En la app de escritorio, aquí se vuelve a abrir como administrador."); },
     async locate(root, path) {
       const t = tree(root);

@@ -70,6 +70,7 @@ export default function App() {
   const [msg, setMsg] = useState<{ text: string; error?: boolean; at: number } | null>(null);
   const [palette, setPalette] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [update, setUpdate] = useState<{ version: string; installing?: boolean } | null>(null);
 
   const toast = useCallback((text: string, error = false) => setMsg({ text, error, at: Date.now() }), []);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -99,6 +100,8 @@ export default function App() {
   useEffect(() => {
     if (!api) return;
     api.isAdmin().then(setIsAdmin).catch(() => {});
+    // Busca una versión nueva unos segundos después de abrir, sin molestar si no hay conexión.
+    const upd = setTimeout(() => { api.checkUpdate().then((u) => u && setUpdate({ version: u.version })).catch(() => {}); }, 4000);
     refreshDrives();
     const subs = [
       api.onProgress((p) => setScanning(p)),
@@ -113,7 +116,7 @@ export default function App() {
       api.onLoaded(() => { refreshDrives(); bump(); }),
       api.onChanges(() => bump()),
     ];
-    return () => { subs.forEach((s) => s.then((off) => off())); };
+    return () => { clearTimeout(upd); subs.forEach((s) => s.then((off) => off())); };
   }, [api, refreshDrives, bump]);
 
   // Mientras se analiza, el árbol ya se puede consultar y va creciendo: las vistas se refrescan solas.
@@ -183,6 +186,15 @@ export default function App() {
         <h1>AppWindowsTreeSize</h1>
         {api.isDemo && <span className="demo-badge" title="Abierto en el navegador: se muestran datos de ejemplo">Datos de ejemplo</span>}
         <div className="sp" />
+        {update && (
+          <button className="btn small update-btn" disabled={update.installing} title="Descarga la versión nueva, la instala y reinicia la app"
+            onClick={() => {
+              setUpdate({ ...update, installing: true });
+              api.installUpdate().catch((e) => { setUpdate({ version: update.version }); toast(String(e), true); });
+            }}>
+            {update.installing ? "Actualizando…" : `Actualizar a la versión ${update.version}`}
+          </button>
+        )}
         <button className="search" onClick={() => setPalette(true)} aria-label="Buscar archivos y carpetas">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
           <span>Buscar archivos y carpetas…</span><kbd>Ctrl K</kbd>

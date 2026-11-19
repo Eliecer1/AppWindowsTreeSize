@@ -27,6 +27,10 @@ export interface Api {
   /** Id de una ruta dentro del análisis, o null si ya no está. */
   locate(root: string, path: string): Promise<number | null>;
   isAdmin(): Promise<boolean>;
+  /** Versión nueva publicada en GitHub, o null. */
+  checkUpdate(): Promise<{ version: string; notes: string | null } | null>;
+  /** Descarga e instala la versión nueva y reinicia la app. */
+  installUpdate(): Promise<void>;
   /** Vuelve a abrir la app como administrador (Windows pide confirmación). */
   restartAsAdmin(): Promise<void>;
   getSubtree(root: string, id: number, depth: number): Promise<SubNode | null>;
@@ -71,6 +75,8 @@ async function tauriApi(): Promise<Api> {
     getChanges: (root) => invoke("get_changes", { root }),
     locate: (root, path) => invoke("locate", { root, path }),
     isAdmin: () => invoke("is_admin"),
+    checkUpdate: () => invoke("check_update"),
+    installUpdate: () => invoke("install_update"),
     restartAsAdmin: () => invoke("restart_as_admin"),
     getSubtree: (root, id, depth) => invoke("get_subtree", { root, id, depth }),
     findFiles: (root, id, filter, limit) => invoke("find_files", { root, id, filter, limit }),

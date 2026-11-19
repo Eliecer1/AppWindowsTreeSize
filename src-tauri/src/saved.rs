@@ -1,6 +1,6 @@
 //! Análisis guardados en disco: se abren al iniciar la app y se comparan con el siguiente análisis.
 //!
-//! Viven en `%LOCALAPPDATA%\com.appwindowstreesize.app\scans`: un `.awts` por disco o carpeta con el
+//! Viven en `%LOCALAPPDATA%\com.eliecer.appwindowstreesize\scans`: un `.awts` por disco o carpeta con el
 //! último análisis, y un `.changes.json` con lo que cambió respecto al análisis anterior.
 
 use crate::AppState;

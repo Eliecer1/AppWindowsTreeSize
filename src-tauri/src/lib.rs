@@ -509,6 +509,41 @@ fn register_explorer_menu() {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    version: String,
+    notes: Option<String>,
+}
+
+/// Busca una versión nueva en GitHub Releases. `None` si ya es la última o no hay conexión.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Option<UpdateInfo> {
+    use tauri_plugin_updater::UpdaterExt;
+    // Sin clave pública configurada no se podría verificar la descarga: no se ofrece nada.
+    let pubkey = app.config().plugins.0.get("updater").and_then(|u| u.get("pubkey")).and_then(|p| p.as_str()).unwrap_or("");
+    if pubkey.is_empty() {
+        return None;
+    }
+    let update = app.updater().ok()?.check().await.ok()??;
+    Some(UpdateInfo { version: update.version.clone(), notes: update.body.clone() })
+}
+
+/// Descarga e instala la versión nueva y reinicia la app.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| format!("No se pudo buscar la actualización: {e}"))?
+        .ok_or("Ya tienes la última versión")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("No se pudo instalar la actualización: {e}"))?;
+    app.restart();
+}
+
 /// La app se está ejecutando como administrador.
 #[tauri::command]
 fn is_admin() -> bool {
@@ -555,6 +590,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             saved::load_all(app.handle().clone());
             // Solo en la app instalada: en modo desarrollo apuntaría al ejecutable de prueba.
@@ -586,6 +622,8 @@ pub fn run() {
             delete_permanently,
             empty_recycle_bin,
             startup_path,
+            check_update,
+            install_update,
         ])
         .run(tauri::generate_context!())
         .expect("no se pudo iniciar AppWindowsTreeSize");

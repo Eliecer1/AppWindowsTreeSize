@@ -297,3 +297,4 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .confirm.danger { border-color: var(--bad); background: var(--bad-soft); }
 .crumbs-bar .crumbs { flex: 1; min-width: 0; }
 .crumbs button:disabled { opacity: .35; }
+.update-btn { background: var(--ok-soft); color: var(--ok); border-color: transparent; font-weight: 600; }
