@@ -3,23 +3,33 @@
 //! Recorre una carpeta o unidad en paralelo, suma el tamaño de cada carpeta y guarda el
 //! resultado en un árbol plano (`Tree`) que la interfaz consulta por partes: nunca se envía
 //! el árbol completo, solo los hijos de la carpeta que se está viendo.
+//!
+//! El árbol está pensado para millones de archivos: cada elemento ocupa 40 bytes, los nombres
+//! viven todos juntos en un solo bloque de texto y los datos que solo tienen sentido en las
+//! carpetas (hijos, totales por tipo) se guardan aparte, solo para ellas.
 
 mod category;
 mod disk;
 
 pub use category::{extension, Category, Context};
-pub use disk::{FileStat, Volume};
+pub use disk::{FileStat, RawEntry, Volume};
 
 use rayon::prelude::*;
 use serde::Serialize;
-use std::fs;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::RwLock;
-use std::time::UNIX_EPOCH;
 
 pub type NodeId = u32;
 const NO_PARENT: NodeId = NodeId::MAX;
+const NO_DIR: u32 = u32::MAX;
+
+const F_DIR: u8 = 1;
+/// Archivo de la nube que no está descargado.
+const F_CLOUD: u8 = 2;
+/// Otro nombre (enlace duro) de un archivo que ya se contó en otra parte: no suma espacio.
+const F_LINK: u8 = 4;
 
 /// Contadores que el escaneo actualiza mientras avanza, para mostrar el progreso en vivo.
 #[derive(Default)]
@@ -40,68 +50,65 @@ impl Progress {
     }
 }
 
-/// Un archivo o carpeta dentro del árbol.
+/// Un archivo o carpeta dentro del árbol (40 bytes).
 #[derive(Debug, Clone)]
-pub struct Entry {
-    pub name: Box<str>,
-    pub parent: NodeId,
-    pub is_dir: bool,
+struct Node {
+    /// Posición del nombre dentro de `Tree::names`.
+    name: u32,
+    name_len: u16,
+    flags: u8,
+    category: Category,
+    parent: NodeId,
+    /// Índice en `Tree::dirs` si es una carpeta.
+    dir: u32,
     /// Espacio que ocupa realmente en el disco. Es el tamaño con el que se ordena y se dibuja todo.
-    pub size: u64,
+    size: u64,
     /// Tamaño que muestra el Explorador de Windows.
-    pub logical: u64,
-    /// Bytes que están solo en la nube (OneDrive y similares) y no ocupan espacio local.
-    pub cloud: u64,
-    /// Archivos contenidos que son marcadores de posición de la nube.
-    pub cloud_files: u64,
-    /// Archivos contenidos (1 para un archivo).
-    pub files: u64,
-    /// Subcarpetas contenidas a cualquier profundidad.
-    pub dirs: u64,
+    logical: u64,
     /// Última modificación en segundos Unix (para carpetas, la más reciente de su contenido).
-    pub modified: i64,
-    pub category: Category,
-    /// Bytes por categoría, solo en carpetas.
-    pub by_category: Option<Box<[u64; 9]>>,
+    modified: i64,
+}
+
+/// Lo que solo tienen las carpetas.
+#[derive(Debug, Clone, Default)]
+struct Dir {
+    /// Bytes que están solo en la nube (OneDrive y similares) y no ocupan espacio local.
+    cloud: u64,
+    /// Archivos contenidos que son marcadores de posición de la nube.
+    cloud_files: u64,
+    /// Archivos contenidos a cualquier profundidad.
+    files: u64,
+    /// Subcarpetas contenidas a cualquier profundidad.
+    dirs: u64,
+    /// Bytes por categoría.
+    cats: [u64; 9],
     /// Hijos ordenados de mayor a menor tamaño.
-    pub children: Vec<NodeId>,
+    children: Vec<NodeId>,
 }
 
 /// Resultado de un escaneo. Se va llenando mientras el escaneo avanza, así que se puede consultar
 /// (detrás de un `RwLock`) antes de que termine.
 pub struct Tree {
     root_path: PathBuf,
-    entries: Vec<Entry>,
+    nodes: Vec<Node>,
+    dirs: Vec<Dir>,
+    names: String,
     /// Hay un escaneo escribiendo en el árbol: los hijos todavía no están ordenados.
     live: bool,
+    /// Identificadores de archivo vistos durante el escaneo en curso, para detectar enlaces duros.
+    seen: HashMap<u64, NodeId>,
+    /// Archivos con más de un nombre: identificador → elemento donde se contó su espacio.
+    links: HashMap<u64, NodeId>,
 }
 
-impl Entry {
-    fn dir(name: Box<str>, parent: NodeId) -> Self {
-        Entry {
-            name,
-            parent,
-            is_dir: true,
-            size: 0,
-            logical: 0,
-            cloud: 0,
-            cloud_files: 0,
-            files: 0,
-            dirs: 0,
-            modified: 0,
-            category: Category::Other,
-            by_category: Some(Box::new([0; 9])),
-            children: Vec::new(),
-        }
-    }
-}
-
-fn modified_secs(meta: &fs::Metadata) -> i64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+/// Lo que se agrega al árbol de un archivo leído del disco.
+#[derive(Debug, Clone)]
+pub struct NewFile {
+    pub name: String,
+    pub stat: FileStat,
+    pub modified: i64,
+    pub category: Category,
+    pub file_id: Option<u64>,
 }
 
 /// Escanea `root` y devuelve el árbol completo. Si se cancela, devuelve lo leído hasta ese momento.
@@ -140,8 +147,8 @@ fn walk(tree: &RwLock<Tree>, id: NodeId, path: &Path, ctx: Context, vol: &Volume
     if progress.is_cancelled() {
         return;
     }
-    let rd = match fs::read_dir(path) {
-        Ok(rd) => rd,
+    let raw = match disk::list(path, vol) {
+        Ok(r) => r,
         Err(_) => {
             progress.errors.fetch_add(1, Ordering::Relaxed);
             return;
@@ -149,67 +156,27 @@ fn walk(tree: &RwLock<Tree>, id: NodeId, path: &Path, ctx: Context, vol: &Volume
     };
     let mut files = Vec::new();
     let mut subdirs = Vec::new();
-    for entry in rd.flatten() {
-        // `DirEntry::metadata` no sigue enlaces simbólicos ni uniones (junctions),
-        // así que no contamos dos veces carpetas como "Documents and Settings".
-        let Ok(meta) = entry.metadata() else {
-            progress.errors.fetch_add(1, Ordering::Relaxed);
-            continue;
-        };
-        let ft = meta.file_type();
-        if ft.is_symlink() {
+    for r in raw {
+        if r.is_dir {
+            subdirs.push(r.name);
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if ft.is_dir() {
-            subdirs.push((entry.path(), name));
-            continue;
-        }
-        let st = disk::stat(&entry.path(), &meta, vol);
-        progress.files.fetch_add(1, Ordering::Relaxed);
-        progress.bytes.fetch_add(st.allocated, Ordering::Relaxed);
-        files.push(Entry {
-            category: ctx.categorize(&extension(&name)),
-            name: name.into_boxed_str(),
-            parent: id,
-            is_dir: false,
-            size: st.allocated,
-            logical: st.logical,
-            cloud: if st.cloud { st.logical.saturating_sub(st.allocated) } else { 0 },
-            cloud_files: st.cloud as u64,
-            files: 1,
-            dirs: 0,
-            modified: modified_secs(&meta),
-            by_category: None,
-            children: Vec::new(),
-        });
+        let stat = disk::stat(&path.join(&r.name), &r, vol);
+        files.push(NewFile { category: ctx.categorize(&extension(&r.name)), modified: r.modified, file_id: r.file_id, stat, name: r.name });
     }
+    progress.files.fetch_add(files.len() as u64, Ordering::Relaxed);
 
     // Un solo bloqueo por carpeta: se agregan sus archivos y subcarpetas y se suman a las de arriba.
     let next: Vec<(NodeId, PathBuf, Context)> = {
         let mut t = write(tree);
         // La carpeta se borró o se volvió a escanear mientras tanto: lo leído ya no le corresponde.
-        if id != Tree::ROOT && t.entries[id as usize].parent == NO_PARENT {
+        if !t.attached(id) {
             return;
         }
-        let mut added = Totals::default();
-        for f in files {
-            added.add(&f);
-            let fid = t.entries.len() as NodeId;
-            t.entries.push(f);
-            t.entries[id as usize].children.push(fid);
-        }
-        let mut next = Vec::with_capacity(subdirs.len());
-        for (p, name) in subdirs {
-            let cid = t.entries.len() as NodeId;
-            let child_ctx = ctx.enter(&name);
-            t.entries.push(Entry::dir(name.into_boxed_str(), id));
-            t.entries[id as usize].children.push(cid);
-            next.push((cid, p, child_ctx));
-        }
-        added.dirs = next.len() as u64;
-        t.apply(id, &added, true, false);
-        next
+        let counted = t.add_files(id, files);
+        progress.bytes.fetch_add(counted, Ordering::Relaxed);
+        let ids = t.add_dirs(id, subdirs.iter().map(String::as_str));
+        ids.into_iter().zip(subdirs).map(|(cid, name)| (cid, path.join(&name), ctx.enter(&name))).collect()
     };
     next.into_par_iter().for_each(|(cid, p, c)| walk(tree, cid, &p, c, vol, progress));
 }
@@ -233,6 +200,8 @@ pub struct NodeInfo {
     pub cloud_files: u64,
     /// Archivo que no está descargado: está en la nube y no ocupa espacio local.
     pub cloud_only: bool,
+    /// Otro nombre de un archivo cuyo espacio ya se contó en otra carpeta (enlace duro).
+    pub hardlink: bool,
     pub files: u64,
     pub dirs: u64,
     pub modified: i64,
@@ -253,11 +222,17 @@ impl Tree {
 
     /// Árbol vacío listo para que `scan_into` lo llene.
     pub fn new(root: &Path) -> Tree {
-        Tree {
+        let mut t = Tree {
             root_path: root.to_path_buf(),
-            entries: vec![Entry::dir(root.to_string_lossy().into(), NO_PARENT)],
+            nodes: Vec::new(),
+            dirs: Vec::new(),
+            names: String::new(),
             live: true,
-        }
+            seen: HashMap::new(),
+            links: HashMap::new(),
+        };
+        t.add_dir(NO_PARENT, &root.to_string_lossy());
+        t
     }
 
     /// Todavía hay un escaneo escribiendo en el árbol.
@@ -270,15 +245,138 @@ impl Tree {
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.nodes.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.nodes.is_empty()
     }
 
-    pub fn entry(&self, id: NodeId) -> Option<&Entry> {
-        self.entries.get(id as usize)
+    /// Bytes de memoria que ocupa el árbol, aproximadamente.
+    pub fn memory(&self) -> usize {
+        self.nodes.capacity() * std::mem::size_of::<Node>()
+            + self.dirs.capacity() * std::mem::size_of::<Dir>()
+            + self.dirs.iter().map(|d| d.children.capacity() * 4).sum::<usize>()
+            + self.names.capacity()
+    }
+
+    /// El elemento existe y sigue en el árbol (no se borró ni se reemplazó al refrescar).
+    pub fn attached(&self, id: NodeId) -> bool {
+        id == Self::ROOT || self.nodes.get(id as usize).is_some_and(|n| n.parent != NO_PARENT)
+    }
+
+    pub fn name(&self, id: NodeId) -> &str {
+        let n = &self.nodes[id as usize];
+        &self.names[n.name as usize..n.name as usize + n.name_len as usize]
+    }
+
+    pub fn is_dir(&self, id: NodeId) -> bool {
+        self.nodes.get(id as usize).is_some_and(|n| n.flags & F_DIR != 0)
+    }
+
+    pub fn size(&self, id: NodeId) -> u64 {
+        self.nodes.get(id as usize).map_or(0, |n| n.size)
+    }
+
+    pub fn parent(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes.get(id as usize).map(|n| n.parent).filter(|p| *p != NO_PARENT)
+    }
+
+    /// Hijos directos de una carpeta (vacío para archivos).
+    pub fn kids(&self, id: NodeId) -> &[NodeId] {
+        match self.nodes.get(id as usize) {
+            Some(n) if n.dir != NO_DIR => &self.dirs[n.dir as usize].children,
+            _ => &[],
+        }
+    }
+
+    fn dir_mut(&mut self, id: NodeId) -> &mut Dir {
+        let d = self.nodes[id as usize].dir;
+        &mut self.dirs[d as usize]
+    }
+
+    fn push_name(&mut self, name: &str) -> (u32, u16) {
+        // Los nombres de Windows tienen como máximo 255 caracteres UTF-16 (765 bytes en UTF-8).
+        let mut end = name.len().min(u16::MAX as usize);
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        let off = self.names.len() as u32;
+        self.names.push_str(&name[..end]);
+        (off, end as u16)
+    }
+
+    /// Agrega una carpeta vacía dentro de `parent` y devuelve su id.
+    pub fn add_dir(&mut self, parent: NodeId, name: &str) -> NodeId {
+        let id = self.push_dir(parent, name);
+        if parent != NO_PARENT {
+            self.apply(parent, &Totals { dirs: 1, ..Totals::default() }, true, false);
+        }
+        id
+    }
+
+    /// Agrega varias carpetas vacías dentro de `parent` con una sola actualización de los totales.
+    pub fn add_dirs<'a>(&mut self, parent: NodeId, names: impl IntoIterator<Item = &'a str>) -> Vec<NodeId> {
+        let ids: Vec<NodeId> = names.into_iter().map(|n| self.push_dir(parent, n)).collect();
+        if !ids.is_empty() {
+            self.apply(parent, &Totals { dirs: ids.len() as u64, ..Totals::default() }, true, false);
+        }
+        ids
+    }
+
+    fn push_dir(&mut self, parent: NodeId, name: &str) -> NodeId {
+        let id = self.nodes.len() as NodeId;
+        let (off, len) = self.push_name(name);
+        self.dirs.push(Dir::default());
+        self.nodes.push(Node {
+            name: off,
+            name_len: len,
+            flags: F_DIR,
+            category: Category::Other,
+            parent,
+            dir: (self.dirs.len() - 1) as u32,
+            size: 0,
+            logical: 0,
+            modified: 0,
+        });
+        if parent != NO_PARENT {
+            self.dir_mut(parent).children.push(id);
+        }
+        id
+    }
+
+    /// Agrega archivos a la carpeta `parent` y suma su tamaño a ella y a las de arriba.
+    /// Los archivos que ya se vieron con otro nombre (enlaces duros) no suman espacio.
+    /// Devuelve los bytes en disco que se sumaron.
+    pub fn add_files(&mut self, parent: NodeId, files: Vec<NewFile>) -> u64 {
+        let mut added = Totals::default();
+        for f in files {
+            let id = self.nodes.len() as NodeId;
+            let mut flags = 0;
+            if let Some(fid) = f.file_id {
+                match self.seen.get(&fid) {
+                    Some(first) => {
+                        self.links.insert(fid, *first);
+                        flags |= F_LINK;
+                    }
+                    None => {
+                        self.seen.insert(fid, id);
+                    }
+                }
+            }
+            let (size, logical) = if flags & F_LINK != 0 { (0, f.stat.logical) } else { (f.stat.allocated, f.stat.logical) };
+            if f.stat.cloud && flags & F_LINK == 0 {
+                flags |= F_CLOUD;
+            }
+            let (off, len) = self.push_name(&f.name);
+            let node = Node { name: off, name_len: len, flags, category: f.category, parent, dir: NO_DIR, size, logical, modified: f.modified };
+            added.add(&node);
+            self.nodes.push(node);
+            self.dir_mut(parent).children.push(id);
+        }
+        let bytes = added.size;
+        self.apply(parent, &added, true, false);
+        bytes
     }
 
     /// Ruta completa en disco de un nodo.
@@ -286,9 +384,8 @@ impl Tree {
         let mut parts = Vec::new();
         let mut cur = id;
         while cur != Self::ROOT && cur != NO_PARENT {
-            let e = &self.entries[cur as usize];
-            parts.push(&*e.name);
-            cur = e.parent;
+            parts.push(self.name(cur));
+            cur = self.nodes[cur as usize].parent;
         }
         let mut p = self.root_path.clone();
         for part in parts.into_iter().rev() {
@@ -298,35 +395,45 @@ impl Tree {
     }
 
     pub fn info(&self, id: NodeId) -> Option<NodeInfo> {
-        let e = self.entry(id)?;
+        let n = self.nodes.get(id as usize)?;
+        let is_dir = n.flags & F_DIR != 0;
+        let (cloud, cloud_files, files, dirs) = if is_dir {
+            let d = &self.dirs[n.dir as usize];
+            (d.cloud, d.cloud_files, d.files, d.dirs)
+        } else if n.flags & F_CLOUD != 0 {
+            (n.logical.saturating_sub(n.size), 1, 1, 0)
+        } else {
+            (0, 0, 1, 0)
+        };
         Some(NodeInfo {
             id,
-            parent: (e.parent != NO_PARENT).then_some(e.parent),
-            name: if id == Self::ROOT { self.root_path.to_string_lossy().into_owned() } else { e.name.to_string() },
+            parent: (n.parent != NO_PARENT).then_some(n.parent),
+            name: if id == Self::ROOT { self.root_path.to_string_lossy().into_owned() } else { self.name(id).to_string() },
             path: self.path_of(id).to_string_lossy().into_owned(),
-            is_dir: e.is_dir,
-            size: e.size,
-            logical: e.logical,
-            cloud: e.cloud,
-            cloud_files: e.cloud_files,
-            cloud_only: !e.is_dir && e.cloud_files == 1,
-            files: e.files,
-            dirs: e.dirs,
-            modified: e.modified,
-            ext: if e.is_dir { String::new() } else { extension(&e.name) },
-            category: e.category,
-            has_children: e.children.iter().any(|c| self.entries[*c as usize].is_dir),
+            is_dir,
+            size: n.size,
+            logical: n.logical,
+            cloud,
+            cloud_files,
+            cloud_only: n.flags & F_CLOUD != 0,
+            hardlink: n.flags & F_LINK != 0,
+            files,
+            dirs,
+            modified: n.modified,
+            ext: if is_dir { String::new() } else { extension(self.name(id)) },
+            category: n.category,
+            has_children: self.kids(id).iter().any(|c| self.is_dir(*c)),
         })
     }
 
     /// Hijos de una carpeta, de mayor a menor, paginados.
     pub fn children(&self, id: NodeId, offset: usize, limit: usize) -> Vec<NodeInfo> {
-        let Some(e) = self.entry(id) else { return Vec::new() };
+        let kids = self.kids(id);
         if !self.live {
-            return e.children.iter().skip(offset).take(limit).filter_map(|c| self.info(*c)).collect();
+            return kids.iter().skip(offset).take(limit).filter_map(|c| self.info(*c)).collect();
         }
         // Durante el escaneo los tamaños cambian a cada momento: se ordena al consultar.
-        let mut kids = e.children.clone();
+        let mut kids = kids.to_vec();
         kids.sort_by(|a, b| self.order(*a, *b));
         kids.into_iter().skip(offset).take(limit).filter_map(|c| self.info(c)).collect()
     }
@@ -340,44 +447,52 @@ impl Tree {
                 Some(i) => out.push(i),
                 None => break,
             }
-            cur = self.entries[cur as usize].parent;
+            cur = self.nodes[cur as usize].parent;
         }
         out.reverse();
         out
     }
 
     pub fn categories(&self, id: NodeId) -> Vec<CategorySize> {
-        let Some(e) = self.entry(id) else { return Vec::new() };
-        let mut v: Vec<CategorySize> = match &e.by_category {
-            Some(b) => Category::ALL
+        let Some(n) = self.nodes.get(id as usize) else { return Vec::new() };
+        let mut v: Vec<CategorySize> = if n.dir != NO_DIR {
+            let b = &self.dirs[n.dir as usize].cats;
+            Category::ALL
                 .into_iter()
                 .map(|c| CategorySize { category: c, size: b[c.index()] })
                 .filter(|c| c.size > 0)
-                .collect(),
-            None => vec![CategorySize { category: e.category, size: e.size }],
+                .collect()
+        } else {
+            vec![CategorySize { category: n.category, size: n.size }]
         };
         v.sort_by(|a, b| b.size.cmp(&a.size));
         v
     }
 
-    /// Los `n` archivos más grandes bajo `id`.
+    /// Los `n` archivos más grandes bajo `id`. Usa un montículo de tamaño `n`, así no reserva
+    /// memoria para millones de archivos.
     pub fn largest_files(&self, id: NodeId, n: usize) -> Vec<NodeInfo> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let mut heap: BinaryHeap<std::cmp::Reverse<(u64, NodeId)>> = BinaryHeap::with_capacity(n + 1);
         let mut stack = vec![id];
-        let mut files: Vec<(u64, NodeId)> = Vec::new();
         while let Some(cur) = stack.pop() {
-            let e = &self.entries[cur as usize];
-            if e.is_dir {
-                stack.extend(&e.children);
-            } else {
-                files.push((e.size, cur));
+            if self.is_dir(cur) {
+                stack.extend(self.kids(cur));
+                continue;
+            }
+            let s = self.size(cur);
+            if heap.len() < n {
+                heap.push(std::cmp::Reverse((s, cur)));
+            } else if heap.peek().is_some_and(|m| m.0 .0 < s) {
+                heap.pop();
+                heap.push(std::cmp::Reverse((s, cur)));
             }
         }
-        if files.len() > n && n > 0 {
-            files.select_nth_unstable_by(n - 1, |a, b| b.0.cmp(&a.0));
-            files.truncate(n);
-        }
-        files.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-        files.into_iter().take(n).filter_map(|(_, i)| self.info(i)).collect()
+        let mut v: Vec<(u64, NodeId)> = heap.into_iter().map(|r| r.0).collect();
+        v.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        v.into_iter().filter_map(|(_, i)| self.info(i)).collect()
     }
 
     /// Busca por nombre (sin distinguir mayúsculas). Si la consulta empieza por un punto, busca por extensión.
@@ -387,17 +502,14 @@ impl Tree {
             return Vec::new();
         }
         let by_ext = q.strip_prefix('.').map(str::to_string);
-        let mut hits: Vec<(u64, NodeId)> = self
-            .entries
-            .par_iter()
-            .enumerate()
-            .skip(1)
-            .filter(|(_, e)| e.parent != NO_PARENT)
-            .filter(|(_, e)| match &by_ext {
-                Some(ext) => !e.is_dir && extension(&e.name) == *ext,
-                None => e.name.to_lowercase().contains(&q),
+        let mut hits: Vec<(u64, NodeId)> = (1..self.nodes.len() as NodeId)
+            .into_par_iter()
+            .filter(|i| self.nodes[*i as usize].parent != NO_PARENT)
+            .filter(|i| match &by_ext {
+                Some(ext) => !self.is_dir(*i) && extension(self.name(*i)) == *ext,
+                None => self.name(*i).to_lowercase().contains(&q),
             })
-            .map(|(i, e)| (e.size, i as NodeId))
+            .map(|i| (self.size(i), i))
             .collect();
         hits.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         hits.into_iter().take(limit).filter_map(|(_, i)| self.info(i)).collect()
@@ -408,26 +520,22 @@ impl Tree {
         let mut cur = Self::ROOT;
         for comp in relative.components() {
             let name = comp.as_os_str().to_string_lossy();
-            cur = *self.entries[cur as usize]
-                .children
-                .iter()
-                .find(|c| self.entries[**c as usize].name.eq_ignore_ascii_case(&name))?;
+            cur = *self.kids(cur).iter().find(|c| self.name(**c).eq_ignore_ascii_case(&name))?;
         }
         Some(cur)
     }
 
     /// Quita un nodo del árbol tras borrarlo del disco y descuenta su tamaño de las carpetas superiores.
     pub fn remove(&mut self, id: NodeId) -> Option<u64> {
-        if id == Self::ROOT {
+        if id == Self::ROOT || !self.attached(id) || id as usize >= self.nodes.len() {
             return None;
         }
-        let e = self.entry(id)?;
-        if e.parent == NO_PARENT {
-            return None;
-        }
-        let (parent, size, totals) = (e.parent, e.size, Totals::of(e));
-        self.entries[parent as usize].children.retain(|c| *c != id);
-        self.apply(parent, &totals, false, !self.live);
+        let parent = self.nodes[id as usize].parent;
+        let size = self.nodes[id as usize].size;
+        let totals = self.totals_of(id);
+        self.dir_mut(parent).children.retain(|c| *c != id);
+        let resort = !self.live;
+        self.apply(parent, &totals, false, resort);
         self.detach(id);
         Some(size)
     }
@@ -435,8 +543,7 @@ impl Tree {
     /// Prepara el árbol para volver a leer la carpeta `id`: descuenta lo que tenía y la deja vacía.
     /// Devuelve la ruta y el contexto con que hay que recorrerla, o `None` si ya no existe.
     fn begin_rescan(&mut self, id: NodeId) -> Option<(PathBuf, Context)> {
-        let e = self.entry(id)?;
-        if !e.is_dir || (id != Self::ROOT && e.parent == NO_PARENT) {
+        if !self.is_dir(id) || !self.attached(id) {
             return None;
         }
         if id == Self::ROOT {
@@ -453,22 +560,39 @@ impl Tree {
         let mut cur = id;
         while cur != Self::ROOT {
             chain.push(cur);
-            cur = self.entries[cur as usize].parent;
+            cur = self.nodes[cur as usize].parent;
         }
-        let ctx = chain.iter().rev().fold(Context::default(), |c, n| c.enter(&self.entries[*n as usize].name));
+        let ctx = chain.iter().rev().fold(Context::default(), |c, n| c.enter(self.name(*n)));
 
-        let e = &self.entries[id as usize];
-        let parent = e.parent;
-        let mut old = Totals::of(e);
+        let parent = self.nodes[id as usize].parent;
+        let mut old = self.totals_of(id);
         old.dirs -= 1; // La carpeta en sí sigue existiendo.
         self.apply(parent, &old, false, false);
-        for c in std::mem::take(&mut self.entries[id as usize].children) {
+        for c in std::mem::take(&mut self.dir_mut(id).children) {
             self.detach(c);
         }
-        let name = std::mem::take(&mut self.entries[id as usize].name);
-        self.entries[id as usize] = Entry::dir(name, parent);
+        let n = &mut self.nodes[id as usize];
+        (n.size, n.logical, n.modified, n.category) = (0, 0, 0, Category::Other);
+        *self.dir_mut(id) = Dir::default();
+
+        // Los enlaces duros cuyo espacio se contó fuera de esta carpeta siguen contados allí.
+        let outside: Vec<(u64, NodeId)> =
+            self.links.iter().filter(|(_, p)| self.attached(**p) && !self.is_inside(**p, id)).map(|(k, v)| (*k, *v)).collect();
+        self.links = outside.iter().copied().collect();
+        self.seen = outside.into_iter().collect();
         self.live = true;
         Some((path, ctx))
+    }
+
+    /// `id` está dentro de la carpeta `ancestor` (a cualquier profundidad).
+    fn is_inside(&self, mut id: NodeId, ancestor: NodeId) -> bool {
+        while id != NO_PARENT {
+            if id == ancestor {
+                return true;
+            }
+            id = self.nodes[id as usize].parent;
+        }
+        false
     }
 
     /// Ordena de mayor a menor los hijos de `id` (a cualquier profundidad) y de sus carpetas superiores.
@@ -476,26 +600,31 @@ impl Tree {
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
             self.sort_children(cur);
-            stack.extend(self.entries[cur as usize].children.iter().filter(|c| self.entries[**c as usize].is_dir));
+            stack.extend(self.kids(cur).iter().filter(|c| self.is_dir(**c)));
         }
-        let mut cur = self.entries[id as usize].parent;
+        let mut cur = self.nodes[id as usize].parent;
         while cur != NO_PARENT {
             self.sort_children(cur);
-            cur = self.entries[cur as usize].parent;
+            cur = self.nodes[cur as usize].parent;
         }
+        self.seen = HashMap::new();
         self.live = false;
     }
 
     fn sort_children(&mut self, id: NodeId) {
-        let mut kids = std::mem::take(&mut self.entries[id as usize].children);
+        if !self.is_dir(id) {
+            return;
+        }
+        let mut kids = std::mem::take(&mut self.dir_mut(id).children);
         kids.sort_by(|x, y| self.order(*x, *y));
-        self.entries[id as usize].children = kids;
+        kids.shrink_to_fit();
+        self.dir_mut(id).children = kids;
     }
 
     /// Orden de los hijos: de mayor a menor; a igual tamaño, carpetas primero y luego por nombre.
     fn order(&self, a: NodeId, b: NodeId) -> std::cmp::Ordering {
-        let (a, b) = (&self.entries[a as usize], &self.entries[b as usize]);
-        b.size.cmp(&a.size).then(b.is_dir.cmp(&a.is_dir)).then_with(|| a.name.cmp(&b.name))
+        let (na, nb) = (&self.nodes[a as usize], &self.nodes[b as usize]);
+        nb.size.cmp(&na.size).then((nb.flags & F_DIR).cmp(&(na.flags & F_DIR))).then_with(|| self.name(a).cmp(self.name(b)))
     }
 
     /// Suma o resta unos totales en `start` y en todas sus carpetas superiores.
@@ -503,27 +632,24 @@ impl Tree {
         let f = |a: &mut u64, v: u64| *a = if add { *a + v } else { a.saturating_sub(v) };
         let mut cur = start;
         while cur != NO_PARENT {
-            let a = &mut self.entries[cur as usize];
-            f(&mut a.size, t.size);
-            f(&mut a.logical, t.logical);
-            f(&mut a.cloud, t.cloud);
-            f(&mut a.cloud_files, t.cloud_files);
-            f(&mut a.files, t.files);
-            f(&mut a.dirs, t.dirs);
+            let n = &mut self.nodes[cur as usize];
+            f(&mut n.size, t.size);
+            f(&mut n.logical, t.logical);
             if add {
-                a.modified = a.modified.max(t.modified);
+                n.modified = n.modified.max(t.modified);
             }
-            if let Some(b) = a.by_category.as_deref_mut() {
-                for (acc, v) in b.iter_mut().zip(t.cats.iter()) {
-                    f(acc, *v);
-                }
-                a.category = Category::ALL
-                    .into_iter()
-                    .max_by_key(|c| b[c.index()])
-                    .filter(|c| b[c.index()] > 0)
-                    .unwrap_or(Category::Other);
+            let (next, dir) = (n.parent, n.dir);
+            let d = &mut self.dirs[dir as usize];
+            f(&mut d.cloud, t.cloud);
+            f(&mut d.cloud_files, t.cloud_files);
+            f(&mut d.files, t.files);
+            f(&mut d.dirs, t.dirs);
+            for (acc, v) in d.cats.iter_mut().zip(t.cats.iter()) {
+                f(acc, *v);
             }
-            let next = a.parent;
+            let cats = d.cats;
+            self.nodes[cur as usize].category =
+                Category::ALL.into_iter().max_by_key(|c| cats[c.index()]).filter(|c| cats[c.index()] > 0).unwrap_or(Category::Other);
             if resort {
                 self.sort_children(cur);
             }
@@ -535,10 +661,34 @@ impl Tree {
     fn detach(&mut self, id: NodeId) {
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
-            let e = &mut self.entries[cur as usize];
-            e.parent = NO_PARENT;
-            stack.extend(std::mem::take(&mut e.children));
+            let n = &mut self.nodes[cur as usize];
+            n.parent = NO_PARENT;
+            if n.dir != NO_DIR {
+                let d = n.dir as usize;
+                stack.extend(std::mem::take(&mut self.dirs[d].children));
+            }
         }
+    }
+
+    /// Lo que un nodo aporta a los totales de sus carpetas superiores.
+    fn totals_of(&self, id: NodeId) -> Totals {
+        let n = &self.nodes[id as usize];
+        if n.dir != NO_DIR {
+            let d = &self.dirs[n.dir as usize];
+            return Totals {
+                size: n.size,
+                logical: n.logical,
+                cloud: d.cloud,
+                cloud_files: d.cloud_files,
+                files: d.files,
+                dirs: 1 + d.dirs,
+                modified: n.modified,
+                cats: d.cats,
+            };
+        }
+        let mut t = Totals::default();
+        t.add(n);
+        t
     }
 }
 
@@ -557,41 +707,23 @@ struct Totals {
 
 impl Totals {
     /// Suma un archivo.
-    fn add(&mut self, f: &Entry) {
+    fn add(&mut self, f: &Node) {
         self.size += f.size;
         self.logical += f.logical;
-        self.cloud += f.cloud;
-        self.cloud_files += f.cloud_files;
+        if f.flags & F_CLOUD != 0 {
+            self.cloud += f.logical.saturating_sub(f.size);
+            self.cloud_files += 1;
+        }
         self.files += 1;
         self.modified = self.modified.max(f.modified);
         self.cats[f.category.index()] += f.size;
-    }
-
-    fn of(e: &Entry) -> Self {
-        let cats = match &e.by_category {
-            Some(b) => **b,
-            None => {
-                let mut b = [0u64; 9];
-                b[e.category.index()] = e.size;
-                b
-            }
-        };
-        Totals {
-            size: e.size,
-            logical: e.logical,
-            cloud: e.cloud,
-            cloud_files: e.cloud_files,
-            files: e.files,
-            dirs: if e.is_dir { 1 + e.dirs } else { 0 },
-            modified: e.modified,
-            cats,
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
 
     fn write(path: &Path, bytes: usize) {
@@ -784,5 +916,42 @@ mod tests {
         let root = t.info(Tree::ROOT).unwrap();
         assert_eq!((root.files, root.dirs), (400, 440));
         assert_eq!(root.logical, (0..40).flat_map(|a| (0..10).map(move |b| 1000 + a * 10 + b)).sum::<u64>());
+    }
+
+    #[test]
+    fn hardlinks_count_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        write(&r.join("a/grande.bin"), 100_000);
+        fs::create_dir_all(r.join("b")).unwrap();
+        fs::hard_link(r.join("a/grande.bin"), r.join("b/otro-nombre.bin")).unwrap();
+        write(&r.join("b/propio.bin"), 1_000);
+        let mut t = scan(r, &Progress::default());
+        let root = t.info(Tree::ROOT).unwrap();
+        // El archivo de 100 KB tiene dos nombres pero ocupa espacio una sola vez.
+        assert!(root.size >= 101_000 && root.size < 150_000, "ocupa {}", root.size);
+        assert_eq!(root.files, 3);
+        let a = t.find(Path::new("a/grande.bin")).unwrap();
+        let b = t.find(Path::new("b/otro-nombre.bin")).unwrap();
+        let (ia, ib) = (t.info(a).unwrap(), t.info(b).unwrap());
+        assert_eq!(ia.hardlink as u8 + ib.hardlink as u8, 1, "solo uno de los dos nombres queda como enlace");
+        assert_eq!(ia.size + ib.size, ia.size.max(ib.size));
+        assert_eq!(ia.logical, ib.logical);
+
+        // Al refrescar la carpeta con el nombre que no suma, sigue sin sumar.
+        let (linked, counted) = if ib.hardlink { ("b", "a") } else { ("a", "b") };
+        let lid = t.find(Path::new(linked)).unwrap();
+        re(&mut t, lid).unwrap();
+        assert_eq!(t.info(Tree::ROOT).unwrap().size, root.size);
+        // Y al refrescar la que sí suma, el espacio sigue contado una sola vez.
+        let cid = t.find(Path::new(counted)).unwrap();
+        re(&mut t, cid).unwrap();
+        let total = t.info(Tree::ROOT).unwrap().size;
+        assert_eq!(total, root.size);
+    }
+
+    #[test]
+    fn nodes_are_compact() {
+        assert_eq!(std::mem::size_of::<Node>(), 40);
     }
 }

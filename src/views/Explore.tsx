@@ -166,6 +166,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
                 {" "}· modificado {date(shown.modified)}
               </p>
               <CloudNote node={shown} />
+              {shown.hardlink && <p className="cloud-note">Este archivo tiene otro nombre en otra carpeta (enlace duro). Su espacio ({size(shown.logical)}) se contó allí, así que aquí no suma.</p>}
               {shown.id === n.id && <div style={{ marginTop: 10, maxWidth: 420 }}><StackBar parts={folder.categories} total={n.size} /></div>}
             </div>
             <div className="actions">

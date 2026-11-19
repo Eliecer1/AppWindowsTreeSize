@@ -172,7 +172,7 @@ class DemoTree {
     const k = (v: number) => (e.isDir ? Math.round(v * this.scale) : v);
     return {
       id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: k(e.size), logical: k(e.logical), cloud: k(e.cloud), cloudFiles: k(e.cloudFiles),
-      cloudOnly: !e.isDir && e.cloudFiles === 1, files: k(e.files), dirs: k(e.dirs),
+      cloudOnly: !e.isDir && e.cloudFiles === 1, hardlink: false, files: k(e.files), dirs: k(e.dirs),
       modified: e.modified, ext: e.isDir ? "" : extOf(e.name), category: e.category,
       hasChildren: e.children.some((c) => this.entries[c].isDir),
     };

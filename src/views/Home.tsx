@@ -40,13 +40,20 @@ export function Home({ ctx }: { ctx: Ctx }) {
     if (!primary?.scanned) return;
     const r = primary.root;
     api.getFolder(r, 0, 0).then((f) => { setCats(f.categories); setRootInfo(f.node); }).catch(() => {});
+  }, [api, primary?.root, primary?.scanned, version, ctx.live]);
+
+  // Recorrer todo el árbol es lo más costoso: durante un análisis se hace cada ~5 segundos, no en cada actualización.
+  const slowTick = Math.floor(ctx.live / 4);
+  useEffect(() => {
+    if (!primary?.scanned) return;
+    const r = primary.root;
     api.largestFiles(r, 0, 10).then(setLargest).catch(() => {});
     api.cleanupSuggestions(r).then((s) => setSavings({
       total: s.reduce((a, x) => a + x.size, 0),
       safe: s.filter((x) => x.risk === "safe").length,
       review: s.filter((x) => x.risk !== "safe").length,
     })).catch(() => {});
-  }, [api, primary?.root, primary?.scanned, version, ctx.live]);
+  }, [api, primary?.root, primary?.scanned, version, slowTick]);
 
   if (!primary) {
     return <div className="view"><div className="card empty-state"><h3>Buscando discos…</h3></div></div>;

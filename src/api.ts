@@ -36,7 +36,7 @@ async function tauriApi(): Promise<Api> {
     getChildren: (root, id, offset, limit) => invoke("get_children", { root, id, offset, limit }),
     rescanFolder: (root, id) => invoke("rescan_folder", { root, id }),
     largestFiles: (root, id, limit) => invoke("largest_files", { root, id, limit }),
-    search: (root, query, limit) => invoke("search", { root, query, limit }),
+    search: (root, query, limit) => invoke("search", { root, queryText: query, limit }),
     cleanupSuggestions: (root) => invoke("cleanup_suggestions", { root }),
     openInExplorer: (path, isDir) => invoke("open_in_explorer", { path, isDir }),
     moveToTrash: (root, ids) => invoke("move_to_trash", { root, ids }),

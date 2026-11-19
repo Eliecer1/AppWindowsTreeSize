@@ -173,19 +173,33 @@ struct FolderView {
     categories: Vec<CategorySize>,
 }
 
+/// Ejecuta una consulta al árbol fuera del hilo de la ventana, para que la interfaz nunca se congele
+/// mientras se recorre un árbol de millones de archivos.
+async fn query<T: Send + 'static>(
+    state: &AppState,
+    root: &str,
+    f: impl FnOnce(&Tree) -> T + Send + 'static,
+) -> Result<T, String> {
+    let tree = state.tree(root)?;
+    tauri::async_runtime::spawn_blocking(move || f(&tree.read().unwrap_or_else(|e| e.into_inner())))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Todo lo que la vista Explorar necesita de una carpeta en una sola llamada.
 #[tauri::command]
-fn get_folder(root: String, id: NodeId, limit: usize, state: State<AppState>) -> Result<FolderView, String> {
-    let tree = state.tree(&root)?;
-    let t = tree.read().unwrap();
-    let node = t.info(id).ok_or("Elemento no encontrado")?;
-    Ok(FolderView {
-        total_children: t.entry(id).map(|e| e.children.len()).unwrap_or(0),
-        children: t.children(id, 0, limit),
-        ancestors: t.ancestors(id),
-        categories: t.categories(id),
-        node,
+async fn get_folder(root: String, id: NodeId, limit: usize, state: State<'_, AppState>) -> Result<FolderView, String> {
+    query(&state, &root, move |t| {
+        let node = t.info(id).ok_or("Elemento no encontrado")?;
+        Ok(FolderView {
+            total_children: t.kids(id).len(),
+            children: t.children(id, 0, limit),
+            ancestors: t.ancestors(id),
+            categories: t.categories(id),
+            node,
+        })
     })
+    .await?
 }
 
 /// Vuelve a leer del disco solo una carpeta. Devuelve `None` si la carpeta ya no existe.
@@ -198,23 +212,23 @@ async fn rescan_folder(root: String, id: NodeId, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
-fn get_children(root: String, id: NodeId, offset: usize, limit: usize, state: State<AppState>) -> Result<Vec<NodeInfo>, String> {
-    Ok(state.tree(&root)?.read().unwrap().children(id, offset, limit))
+async fn get_children(root: String, id: NodeId, offset: usize, limit: usize, state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
+    query(&state, &root, move |t| t.children(id, offset, limit)).await
 }
 
 #[tauri::command]
-fn largest_files(root: String, id: NodeId, limit: usize, state: State<AppState>) -> Result<Vec<NodeInfo>, String> {
-    Ok(state.tree(&root)?.read().unwrap().largest_files(id, limit))
+async fn largest_files(root: String, id: NodeId, limit: usize, state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
+    query(&state, &root, move |t| t.largest_files(id, limit)).await
 }
 
 #[tauri::command]
-fn search(root: String, query: String, limit: usize, state: State<AppState>) -> Result<Vec<NodeInfo>, String> {
-    Ok(state.tree(&root)?.read().unwrap().search(&query, limit))
+async fn search(root: String, query_text: String, limit: usize, state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
+    query(&state, &root, move |t| t.search(&query_text, limit)).await
 }
 
 #[tauri::command]
-fn cleanup_suggestions(root: String, state: State<AppState>) -> Result<Vec<cleanup::Suggestion>, String> {
-    Ok(cleanup::suggestions(&state.tree(&root)?.read().unwrap()))
+async fn cleanup_suggestions(root: String, state: State<'_, AppState>) -> Result<Vec<cleanup::Suggestion>, String> {
+    query(&state, &root, cleanup::suggestions).await
 }
 
 /// Abre el Explorador de Windows en la carpeta, o con el archivo seleccionado.
@@ -245,24 +259,36 @@ fn open_in_explorer(path: String, is_dir: bool) -> Result<(), String> {
 }
 
 /// Envía elementos a la papelera de reciclaje y los quita del árbol. Devuelve los bytes liberados.
+/// El árbol solo se bloquea un instante al principio y al final: mientras Windows mueve los archivos,
+/// la interfaz se puede seguir usando.
 #[tauri::command]
-fn move_to_trash(root: String, ids: Vec<NodeId>, state: State<AppState>) -> Result<u64, String> {
+async fn move_to_trash(root: String, ids: Vec<NodeId>, state: State<'_, AppState>) -> Result<u64, String> {
     let tree = state.tree(&root)?;
-    let mut t = tree.write().unwrap();
-    let mut freed = 0;
-    let mut failed = Vec::new();
-    for id in ids {
-        let path = t.path_of(id);
-        match trash::delete(&path) {
-            Ok(()) => freed += t.remove(id).unwrap_or(0),
-            Err(e) => failed.push(format!("{}: {e}", path.display())),
+    tauri::async_runtime::spawn_blocking(move || {
+        let targets: Vec<(NodeId, PathBuf)> = {
+            let t = tree.read().unwrap_or_else(|e| e.into_inner());
+            ids.into_iter().filter(|id| t.attached(*id) && *id != Tree::ROOT).map(|id| (id, t.path_of(id))).collect()
+        };
+        let mut done = Vec::new();
+        let mut failed = Vec::new();
+        for (id, path) in targets {
+            match trash::delete(&path) {
+                Ok(()) => done.push(id),
+                Err(e) => failed.push(format!("{}: {e}", path.display())),
+            }
         }
-    }
-    if failed.is_empty() || freed > 0 {
-        Ok(freed)
-    } else {
-        Err(format!("No se pudo enviar a la papelera:\n{}", failed.join("\n")))
-    }
+        let freed: u64 = {
+            let mut t = tree.write().unwrap_or_else(|e| e.into_inner());
+            done.iter().filter_map(|id| t.remove(*id)).sum()
+        };
+        if failed.is_empty() || !done.is_empty() {
+            Ok(freed)
+        } else {
+            Err(format!("No se pudo enviar a la papelera:\n{}", failed.join("\n")))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

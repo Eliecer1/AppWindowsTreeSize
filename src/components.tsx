@@ -74,7 +74,17 @@ export function RefreshIcon({ px = 15, spin = false }: { px?: number; spin?: boo
 }
 
 /** Estado de un archivo: descargado en el disco o solo en la nube. */
-export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly"> }) {
+export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly" | "hardlink"> }) {
+  if (node.hardlink) {
+    return (
+      <span className="chip status link-st" title="Es otro nombre de un archivo que ya se contó en otra carpeta. No ocupa espacio extra.">
+        <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+        </svg>
+        Ya contado
+      </span>
+    );
+  }
   return node.cloudOnly ? (
     <span className="chip status cloud-st" title="No está descargado: no ocupa espacio en tu disco"><CloudIcon px={12} /> En la nube</span>
   ) : (

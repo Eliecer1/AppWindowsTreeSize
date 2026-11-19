@@ -173,6 +173,7 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .chip.status { font-size: 11px; padding: 1px 7px; gap: 4px; }
 .chip.cloud-st { background: var(--accent-soft); color: var(--accent); }
 .chip.disk-st { background: var(--ok-soft); color: var(--ok); }
+.chip.link-st { background: var(--panel-2); color: var(--muted); }
 .stat.cloud { display: block; }
 .stat.cloud small { display: flex; align-items: center; gap: 4px; color: var(--accent); }
 .cloud-note { display: flex; align-items: center; gap: 6px; color: var(--accent) !important; font-size: 13px; }

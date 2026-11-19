@@ -28,6 +28,8 @@ export interface NodeInfo {
   cloudFiles: number;
   /** Archivo no descargado: está solo en la nube. */
   cloudOnly: boolean;
+  /** Otro nombre (enlace duro) de un archivo cuyo espacio ya se contó en otra carpeta. */
+  hardlink: boolean;
   files: number;
   dirs: number;
   modified: number;

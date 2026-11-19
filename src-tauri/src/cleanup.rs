@@ -33,7 +33,7 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     fn size(&self, ids: &[NodeId]) -> u64 {
-        ids.iter().filter_map(|i| self.tree.entry(*i)).map(|e| e.size).sum()
+        ids.iter().map(|i| self.tree.size(*i)).sum()
     }
 
     fn add(&mut self, key: &str, title: &str, description: &str, risk: Risk, ids: Vec<NodeId>) {
@@ -73,13 +73,11 @@ impl Builder<'_> {
     /// Busca `rel` dentro de cada perfil de usuario (Users\<nombre>\...).
     fn in_profiles(&self, rel: &str) -> Vec<NodeId> {
         let Some(users) = self.find("Users") else { return Vec::new() };
-        let profiles = self.tree.entry(users).map(|e| e.children.clone()).unwrap_or_default();
-        profiles
-            .into_iter()
-            .filter_map(|p| {
-                let name = &self.tree.entry(p)?.name;
-                self.find(&format!("Users/{name}/{rel}"))
-            })
+        self.tree
+            .kids(users)
+            .iter()
+            .filter(|p| self.tree.is_dir(**p))
+            .filter_map(|p| self.find(&format!("Users/{}/{rel}", self.tree.name(*p))))
             .collect()
     }
 
@@ -87,9 +85,8 @@ impl Builder<'_> {
     fn children_where(&self, parents: &[NodeId], pred: impl Fn(&str, bool) -> bool) -> Vec<NodeId> {
         parents
             .iter()
-            .filter_map(|p| self.tree.entry(*p))
-            .flat_map(|e| e.children.iter().copied())
-            .filter(|c| self.tree.entry(*c).map(|e| pred(&e.name, e.is_dir)).unwrap_or(false))
+            .flat_map(|p| self.tree.kids(*p).iter().copied())
+            .filter(|c| pred(self.tree.name(*c), self.tree.is_dir(*c)))
             .collect()
     }
 }
@@ -99,16 +96,15 @@ fn node_modules(tree: &Tree) -> Vec<NodeId> {
     let mut found = Vec::new();
     let mut stack = vec![Tree::ROOT];
     while let Some(id) = stack.pop() {
-        let Some(e) = tree.entry(id) else { continue };
-        for c in &e.children {
-            let ce = tree.entry(*c).unwrap();
-            if !ce.is_dir {
+        for &c in tree.kids(id) {
+            if !tree.is_dir(c) {
                 continue;
             }
-            if &*ce.name == "node_modules" {
-                found.push(*c);
-            } else if !matches!(&*ce.name, "Windows" | "$Recycle.Bin" | "System Volume Information") {
-                stack.push(*c);
+            let name = tree.name(c);
+            if name == "node_modules" {
+                found.push(c);
+            } else if !matches!(name, "Windows" | "$Recycle.Bin" | "System Volume Information") {
+                stack.push(c);
             }
         }
     }
