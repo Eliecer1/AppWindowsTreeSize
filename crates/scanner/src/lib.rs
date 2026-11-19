@@ -22,7 +22,7 @@ pub use persist::{load, read_header, save, Header};
 pub use tools::{duplicates, export_csv, export_html, DupGroup, FileFilter, SubNode};
 
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,6 +37,20 @@ const F_DIR: u8 = 1;
 const F_CLOUD: u8 = 2;
 /// Otro nombre (enlace duro) de un archivo que ya se contó en otra parte: no suma espacio.
 const F_LINK: u8 = 4;
+
+/// Qué archivos se miran: todos, solo los guardados en este PC o solo los que están en la nube.
+///
+/// Con `Local` se esconde lo que está solo en la nube y no ocupa nada en el disco. Con `Cloud` solo
+/// aparece lo que está en la nube, y el tamaño de cada elemento pasa a ser lo que tiene en la nube
+/// sin descargar, para ver qué ocuparía espacio si se bajara.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Storage {
+    #[default]
+    All,
+    Local,
+    Cloud,
+}
 
 /// Contadores que el escaneo actualiza mientras avanza, para mostrar el progreso en vivo.
 #[derive(Default)]
@@ -671,8 +685,103 @@ impl Tree {
 
     /// Orden de los hijos: de mayor a menor; a igual tamaño, carpetas primero y luego por nombre.
     fn order(&self, a: NodeId, b: NodeId) -> std::cmp::Ordering {
+        self.order_in(a, b, Storage::All)
+    }
+
+    /// Como `order`, pero con el tamaño que cuenta para el filtro `s`.
+    fn order_in(&self, a: NodeId, b: NodeId, s: Storage) -> std::cmp::Ordering {
         let (na, nb) = (&self.nodes[a as usize], &self.nodes[b as usize]);
-        nb.size.cmp(&na.size).then((nb.flags & F_DIR).cmp(&(na.flags & F_DIR))).then_with(|| self.name(a).cmp(self.name(b)))
+        self.amount(b, s)
+            .cmp(&self.amount(a, s))
+            .then((nb.flags & F_DIR).cmp(&(na.flags & F_DIR)))
+            .then_with(|| self.name(a).cmp(self.name(b)))
+    }
+
+    /// Bytes de `id` que cuenta el filtro `s`: lo que ocupa en el disco o, con `Cloud`, lo que está
+    /// solo en la nube.
+    pub fn amount(&self, id: NodeId, s: Storage) -> u64 {
+        let Some(n) = self.nodes.get(id as usize) else { return 0 };
+        match s {
+            Storage::Cloud if n.dir != NO_DIR => self.dirs[n.dir as usize].cloud,
+            Storage::Cloud if n.flags & F_CLOUD != 0 => n.logical.saturating_sub(n.size),
+            Storage::Cloud => 0,
+            _ => n.size,
+        }
+    }
+
+    /// `id` aparece con el filtro `s`.
+    pub fn shows(&self, id: NodeId, s: Storage) -> bool {
+        let Some(n) = self.nodes.get(id as usize) else { return false };
+        let cloud = if n.dir != NO_DIR { self.dirs[n.dir as usize].cloud_files > 0 } else { n.flags & F_CLOUD != 0 };
+        match s {
+            Storage::All => true,
+            // Fuera lo que está en la nube y no ocupa nada en este PC. Una carpeta vacía sigue apareciendo.
+            Storage::Local => n.size > 0 || !cloud,
+            Storage::Cloud => cloud,
+        }
+    }
+
+    /// Como `info`, pero con el tamaño que cuenta para el filtro `s`.
+    pub fn info_in(&self, id: NodeId, s: Storage) -> Option<NodeInfo> {
+        let mut i = self.info(id)?;
+        i.size = self.amount(id, s);
+        Some(i)
+    }
+
+    /// Hijos de una carpeta que aparecen con el filtro `s`, de mayor a menor, paginados.
+    pub fn children_in(&self, id: NodeId, s: Storage, offset: usize, limit: usize) -> Vec<NodeInfo> {
+        if s == Storage::All {
+            return self.children(id, offset, limit);
+        }
+        let mut kids: Vec<NodeId> = self.kids(id).iter().copied().filter(|c| self.shows(*c, s)).collect();
+        // Los hijos ya están ordenados por espacio en disco, salvo mientras se escanea.
+        if s == Storage::Cloud || self.live {
+            kids.sort_by(|a, b| self.order_in(*a, *b, s));
+        }
+        kids.into_iter().skip(offset).take(limit).filter_map(|c| self.info_in(c, s)).collect()
+    }
+
+    /// Cuántos hijos de una carpeta aparecen con el filtro `s`.
+    pub fn count_children(&self, id: NodeId, s: Storage) -> usize {
+        let kids = self.kids(id);
+        if s == Storage::All {
+            kids.len()
+        } else {
+            kids.iter().filter(|c| self.shows(**c, s)).count()
+        }
+    }
+
+    /// Como `ancestors`, con el tamaño que cuenta para el filtro `s`.
+    pub fn ancestors_in(&self, id: NodeId, s: Storage) -> Vec<NodeInfo> {
+        let mut v = self.ancestors(id);
+        for i in &mut v {
+            i.size = self.amount(i.id, s);
+        }
+        v
+    }
+
+    /// Como `categories`, con el tamaño que cuenta para el filtro `s`. Lo que está en la nube no se
+    /// lleva por tipo durante el escaneo, así que se suma recorriendo la carpeta.
+    pub fn categories_in(&self, id: NodeId, s: Storage) -> Vec<CategorySize> {
+        if s != Storage::Cloud {
+            return self.categories(id);
+        }
+        let mut cats = [0u64; 9];
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let Some(n) = self.nodes.get(cur as usize) else { continue };
+            if n.dir != NO_DIR {
+                if self.dirs[n.dir as usize].cloud_files > 0 {
+                    stack.extend(self.kids(cur));
+                }
+            } else if n.flags & F_CLOUD != 0 {
+                cats[n.category.index()] += n.logical.saturating_sub(n.size);
+            }
+        }
+        let mut v: Vec<CategorySize> =
+            Category::ALL.into_iter().map(|c| CategorySize { category: c, size: cats[c.index()] }).filter(|c| c.size > 0).collect();
+        v.sort_by_key(|c| std::cmp::Reverse(c.size));
+        v
     }
 
     /// Suma o resta unos totales en `start` y en todas sus carpetas superiores.
@@ -1043,4 +1152,45 @@ mod tests {
         // Lo que no cambió no aparece.
         assert!(c.children.iter().all(|k| k.name != "AppData"));
     }
+    #[test]
+    fn storage_filter_splits_cloud_and_local() {
+        let mut t = Tree::new(Path::new("C:\\"));
+        let nf = |name: &str, logical: u64, allocated: u64, cloud: bool| NewFile {
+            name: name.into(),
+            stat: FileStat { logical, allocated, cloud },
+            modified: 1,
+            category: Category::Docs,
+            file_id: None,
+        };
+        let od = t.add_dir(Tree::ROOT, "OneDrive");
+        let fotos = t.add_dir(od, "Fotos");
+        t.add_files(fotos, vec![nf("a.jpg", 9_000, 0, true), nf("b.jpg", 5_000, 0, true)]);
+        t.add_files(od, vec![nf("local.docx", 3_000, 3_072, false), nf("medio.mp4", 10_000, 4_096, true)]);
+        let juegos = t.add_dir(Tree::ROOT, "Juegos");
+        t.add_files(juegos, vec![nf("big.pak", 20_000, 20_480, false)]);
+        t.finish(Tree::ROOT);
+
+        // Todo: igual que siempre.
+        assert_eq!(t.count_children(od, Storage::All), 3);
+        // En el disco: la carpeta que está entera en la nube desaparece; el archivo a medio bajar se queda.
+        let local: Vec<_> = t.children_in(od, Storage::Local, 0, 10).into_iter().map(|k| k.name).collect();
+        assert_eq!(local, ["medio.mp4", "local.docx"]);
+        assert_eq!(t.count_children(od, Storage::Local), 2);
+        // En la nube: solo lo que no está descargado, ordenado y medido por lo que hay en la nube.
+        let cloud: Vec<_> = t.children_in(od, Storage::Cloud, 0, 10).into_iter().map(|k| (k.name, k.size)).collect();
+        assert_eq!(cloud, [("Fotos".to_string(), 14_000), ("medio.mp4".to_string(), 10_000 - 4_096)]);
+        let root: Vec<_> = t.children_in(Tree::ROOT, Storage::Cloud, 0, 10).into_iter().map(|k| k.name).collect();
+        assert_eq!(root, ["OneDrive"]);
+        assert_eq!(t.info_in(Tree::ROOT, Storage::Cloud).unwrap().size, 14_000 + 10_000 - 4_096);
+        assert_eq!(t.ancestors_in(fotos, Storage::Cloud)[0].size, 14_000 + 10_000 - 4_096);
+        assert_eq!(t.categories_in(Tree::ROOT, Storage::Cloud)[0].size, 14_000 + 10_000 - 4_096);
+        let sub = t.subtree(Tree::ROOT, 2, 10, Storage::Local).unwrap();
+        assert_eq!(sub.children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Juegos", "OneDrive"]);
+        assert!(sub.children[1].children.iter().all(|c| c.name != "Fotos"));
+
+        let files = |s| t.find_files(Tree::ROOT, &FileFilter { storage: s, ..Default::default() }, 0, 10).into_iter().map(|f| f.name).collect::<Vec<_>>();
+        assert_eq!(files(Storage::Cloud), ["a.jpg", "medio.mp4", "b.jpg"]);
+        assert_eq!(files(Storage::Local), ["big.pak", "medio.mp4", "local.docx"]);
+    }
+
 }

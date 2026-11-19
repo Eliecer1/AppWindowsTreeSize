@@ -1,6 +1,6 @@
 //! Herramientas sobre un árbol ya analizado: filtrar archivos, buscar duplicados y exportar informes.
 
-use crate::{Category, NodeId, NodeInfo, Progress, Tree, F_CLOUD, F_DIR, F_LINK, NO_PARENT};
+use crate::{Category, NodeId, NodeInfo, Progress, Storage, Tree, F_CLOUD, F_DIR, F_LINK, NO_PARENT};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,6 +20,8 @@ pub struct FileFilter {
     pub category: Option<Category>,
     /// Extensión sin punto, en minúsculas.
     pub ext: Option<String>,
+    /// Todos, solo los guardados en este PC o solo los que están en la nube.
+    pub storage: Storage,
 }
 
 /// Una carpeta con sus hijos a varios niveles, para dibujar el mapa de bloques anidado y los anillos.
@@ -37,26 +39,27 @@ pub struct SubNode {
 impl Tree {
     /// `id` y sus hijos hasta `depth` niveles: como mucho `max_children` por carpeta, y nada que
     /// ocupe menos de una milésima del total (no se vería).
-    pub fn subtree(&self, id: NodeId, depth: usize, max_children: usize) -> Option<SubNode> {
-        let total = self.size(id).max(1);
-        self.attached(id).then(|| self.sub(id, depth, max_children, total / 1000))
+    /// Con el filtro `s`, los tamaños son los que cuenta ese filtro.
+    pub fn subtree(&self, id: NodeId, depth: usize, max_children: usize, s: Storage) -> Option<SubNode> {
+        let total = self.amount(id, s).max(1);
+        self.attached(id).then(|| self.sub(id, depth, max_children, total / 1000, s))
     }
 
-    fn sub(&self, id: NodeId, depth: usize, max: usize, min: u64) -> SubNode {
+    fn sub(&self, id: NodeId, depth: usize, max: usize, min: u64, s: Storage) -> SubNode {
         let n = &self.nodes[id as usize];
         let children = if depth == 0 || n.flags & F_DIR == 0 {
             Vec::new()
         } else {
-            let mut kids: Vec<NodeId> = self.kids(id).to_vec();
-            if self.live {
-                kids.sort_by(|a, b| self.order(*a, *b));
+            let mut kids: Vec<NodeId> = self.kids(id).iter().copied().filter(|k| self.shows(*k, s)).collect();
+            if self.live || s == Storage::Cloud {
+                kids.sort_by(|a, b| self.order_in(*a, *b, s));
             }
-            kids.into_iter().take(max).filter(|k| self.size(*k) > min).map(|k| self.sub(k, depth - 1, max, min)).collect()
+            kids.into_iter().take(max).filter(|k| self.amount(*k, s) > min).map(|k| self.sub(k, depth - 1, max, min, s)).collect()
         };
         SubNode {
             id,
             name: if id == Tree::ROOT { self.root_path.to_string_lossy().into_owned() } else { self.name(id).to_string() },
-            size: n.size,
+            size: self.amount(id, s),
             category: n.category,
             is_dir: n.flags & F_DIR != 0,
             children,
@@ -75,7 +78,11 @@ impl Tree {
                 stack.extend(self.kids(cur));
                 continue;
             }
-            if n.size < f.min_size || n.modified > cutoff || f.category.is_some_and(|c| c != n.category) {
+            if !self.shows(cur, f.storage) {
+                continue;
+            }
+            let amount = self.amount(cur, f.storage);
+            if amount < f.min_size || n.modified > cutoff || f.category.is_some_and(|c| c != n.category) {
                 continue;
             }
             if let Some(e) = &ext {
@@ -83,10 +90,10 @@ impl Tree {
                     continue;
                 }
             }
-            hits.push((n.size, cur));
+            hits.push((amount, cur));
         }
         hits.sort_unstable_by_key(|h| std::cmp::Reverse(h.0));
-        hits.into_iter().take(limit).filter_map(|(_, i)| self.info(i)).collect()
+        hits.into_iter().take(limit).filter_map(|(_, i)| self.info_in(i, f.storage)).collect()
     }
 
     /// Archivos que se pueden leer para comparar su contenido: ni enlaces duros ya contados
@@ -374,7 +381,7 @@ mod tests {
         write(&d.path().join("a/b/c/f.bin"), &vec![0u8; 50_000]);
         write(&d.path().join("a/g.bin"), &vec![0u8; 20_000]);
         let t = scan(d.path(), &Progress::default());
-        let s = t.subtree(Tree::ROOT, 2, 10).unwrap();
+        let s = t.subtree(Tree::ROOT, 2, 10, Storage::All).unwrap();
         assert_eq!(s.children[0].name, "a");
         assert_eq!(s.children[0].children.len(), 2);
         assert!(s.children[0].children.iter().all(|c| c.children.is_empty()));

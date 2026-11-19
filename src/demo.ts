@@ -2,7 +2,7 @@
 // Imita el comportamiento de crates/scanner: ids, hijos ordenados por tamaño y totales por carpeta.
 
 import type { Api } from "./api";
-import type { Category, Change, DupGroup, DupProgress, Drive, NodeInfo, ScanDone, ScanProgress, SubNode, Suggestion } from "./types";
+import type { Category, Change, DupGroup, DupProgress, Drive, NodeInfo, ScanDone, ScanProgress, Storage, SubNode, Suggestion } from "./types";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -206,6 +206,15 @@ class DemoTree {
   }
 }
 
+/** Como `Tree::amount` en Rust: espacio en disco o, con el filtro de la nube, lo que está solo en la nube. */
+const amount = (i: NodeInfo, s: Storage = "all") => (s === "cloud" ? i.cloud : i.size);
+/** Como `Tree::shows` en Rust. */
+const shows = (i: NodeInfo, s: Storage = "all") => (s === "all" ? true : s === "local" ? i.size > 0 || i.cloudFiles === 0 : i.cloudFiles > 0);
+const infoIn = (t: DemoTree, id: number, s: Storage = "all") => { const i = t.info(id); return { ...i, size: amount(i, s) }; };
+/** Hijos que se ven con el filtro, de mayor a menor. */
+const kidsIn = (t: DemoTree, id: number, s: Storage = "all") =>
+  t.entries[id].children.map((c) => infoIn(t, c, s)).filter((i) => shows(t.info(i.id), s)).sort((a, b) => b.size - a.size);
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function demoApi(): Api {
@@ -278,25 +287,35 @@ export function demoApi(): Api {
       doneCbs.push(cb);
       return () => doneCbs.splice(doneCbs.indexOf(cb), 1);
     },
-    async getFolder(root, id, limit) {
+    async getFolder(root, id, limit, storage) {
       const t = tree(root);
       const e = t.entries[id];
       const ancestors: NodeInfo[] = [];
-      for (let cur = id; cur >= 0; cur = t.entries[cur].parent) ancestors.unshift(t.info(cur));
+      for (let cur = id; cur >= 0; cur = t.entries[cur].parent) ancestors.unshift(infoIn(t, cur, storage));
+      const kids = kidsIn(t, id, storage);
+      // Lo que está en la nube no se lleva por tipo: se suma recorriendo la carpeta.
+      const byCat: Partial<Record<Category, number>> = storage === "cloud" ? {} : e.byCat;
+      if (storage === "cloud") {
+        const stack = [id];
+        while (stack.length) {
+          const x = t.entries[stack.pop()!];
+          if (x.isDir) stack.push(...x.children);
+          else if (x.cloud > 0) byCat[x.category] = (byCat[x.category] ?? 0) + x.cloud;
+        }
+      }
       return {
-        node: t.info(id),
+        node: infoIn(t, id, storage),
         ancestors,
-        children: e.children.slice(0, limit).map((c) => t.info(c)),
-        totalChildren: e.children.length,
-        categories: Object.entries(e.byCat)
+        children: kids.slice(0, limit),
+        totalChildren: kids.length,
+        categories: Object.entries(byCat)
           .map(([category, size]) => ({ category: category as Category, size: size ?? 0 }))
           .filter((c) => c.size > 0)
           .sort((a, b) => b.size - a.size),
       };
     },
-    async getChildren(root, id, offset, limit) {
-      const t = tree(root);
-      return t.entries[id].children.slice(offset, offset + limit).map((c) => t.info(c));
+    async getChildren(root, id, offset, limit, storage) {
+      return kidsIn(tree(root), id, storage).slice(offset, offset + limit);
     },
     async largestFiles(root, id, limit) {
       const t = tree(root);
@@ -379,15 +398,15 @@ export function demoApi(): Api {
         ]),
       };
     },
-    async getSubtree(root, id, depth) {
+    async getSubtree(root, id, depth, storage) {
       const t = tree(root);
-      const min = t.entries[id].size / 1000;
+      const min = infoIn(t, id, storage).size / 1000;
       const sub = (i: number, d: number): SubNode => {
-        const info = t.info(i);
+        const info = infoIn(t, i, storage);
         const e = t.entries[i];
         return {
           id: i, name: i === 0 ? root : info.name, size: info.size, category: info.category, isDir: info.isDir,
-          children: d > 0 && e.isDir ? e.children.slice(0, 60).filter((c) => t.info(c).size > min).map((c) => sub(c, d - 1)) : [],
+          children: d > 0 && e.isDir ? kidsIn(t, i, storage).slice(0, 60).filter((c) => c.size > min).map((c) => sub(c.id, d - 1)) : [],
         };
       };
       return sub(id, depth);
@@ -402,10 +421,12 @@ export function demoApi(): Api {
         const cur = stack.pop()!;
         const e = t.entries[cur];
         if (e.isDir) { stack.push(...e.children); continue; }
-        if (e.size < (f.minSize ?? 0) || e.modified > cutoff || (f.category && e.category !== f.category) || (ext && extOf(e.name) !== ext)) continue;
+        const info = t.info(cur);
+        if (!shows(info, f.storage)) continue;
+        if (amount(info, f.storage) < (f.minSize ?? 0) || e.modified > cutoff || (f.category && e.category !== f.category) || (ext && extOf(e.name) !== ext)) continue;
         out.push(cur);
       }
-      return out.sort((a, b) => t.entries[b].size - t.entries[a].size).slice(0, limit).map((i) => t.info(i));
+      return out.map((i) => infoIn(t, i, f.storage)).sort((a, b) => b.size - a.size).slice(0, limit);
     },
     async findDuplicates(root, id, minSize) {
       const t = tree(root);

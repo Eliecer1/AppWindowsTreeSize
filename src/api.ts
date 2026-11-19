@@ -1,5 +1,5 @@
 import { tr } from "./i18n";
-import type { Changes, Drive, DupGroup, DupProgress, FileFilter, FolderView, NodeInfo, ScanDone, ScanProgress, SubNode, Suggestion } from "./types";
+import type { Changes, Drive, DupGroup, DupProgress, FileFilter, FolderView, NodeInfo, ScanDone, ScanProgress, Storage, SubNode, Suggestion } from "./types";
 import { demoApi } from "./demo";
 
 /** Lo que la interfaz necesita del motor. En la app de escritorio lo cumple Rust; en el navegador, datos de ejemplo. */
@@ -10,8 +10,9 @@ export interface Api {
   cancelScan(): Promise<void>;
   onProgress(cb: (p: ScanProgress) => void): Promise<() => void>;
   onDone(cb: (d: ScanDone) => void): Promise<() => void>;
-  getFolder(root: string, id: number, limit: number): Promise<FolderView>;
-  getChildren(root: string, id: number, offset: number, limit: number): Promise<NodeInfo[]>;
+  /** Con `storage`, solo aparece lo guardado en este PC o lo que está en la nube, y los tamaños son los de esa parte. */
+  getFolder(root: string, id: number, limit: number, storage?: Storage): Promise<FolderView>;
+  getChildren(root: string, id: number, offset: number, limit: number, storage?: Storage): Promise<NodeInfo[]>;
   /** Vuelve a leer una sola carpeta del disco. Devuelve null si ya no existe. */
   rescanFolder(root: string, id: number): Promise<number | null>;
   largestFiles(root: string, id: number, limit: number): Promise<NodeInfo[]>;
@@ -34,7 +35,7 @@ export interface Api {
   installUpdate(): Promise<void>;
   /** Vuelve a abrir la app como administrador (Windows pide confirmación). */
   restartAsAdmin(): Promise<void>;
-  getSubtree(root: string, id: number, depth: number): Promise<SubNode | null>;
+  getSubtree(root: string, id: number, depth: number, storage?: Storage): Promise<SubNode | null>;
   findFiles(root: string, id: number, filter: FileFilter, limit: number): Promise<NodeInfo[]>;
   findDuplicates(root: string, id: number, minSize: number): Promise<DupGroup[]>;
   cancelDuplicates(): Promise<void>;
@@ -63,8 +64,8 @@ async function tauriApi(): Promise<Api> {
     cancelScan: () => invoke("cancel_scan"),
     onProgress: (cb) => listen<ScanProgress>("scan://progress", (e) => cb(e.payload)),
     onDone: (cb) => listen<ScanDone>("scan://done", (e) => cb(e.payload)),
-    getFolder: (root, id, limit) => invoke("get_folder", { root, id, limit }),
-    getChildren: (root, id, offset, limit) => invoke("get_children", { root, id, offset, limit }),
+    getFolder: (root, id, limit, storage) => invoke("get_folder", { root, id, limit, storage }),
+    getChildren: (root, id, offset, limit, storage) => invoke("get_children", { root, id, offset, limit, storage }),
     rescanFolder: (root, id) => invoke("rescan_folder", { root, id }),
     largestFiles: (root, id, limit) => invoke("largest_files", { root, id, limit }),
     search: (root, query, limit) => invoke("search", { root, queryText: query, limit }),
@@ -79,7 +80,7 @@ async function tauriApi(): Promise<Api> {
     checkUpdate: () => invoke("check_update"),
     installUpdate: () => invoke("install_update"),
     restartAsAdmin: () => invoke("restart_as_admin"),
-    getSubtree: (root, id, depth) => invoke("get_subtree", { root, id, depth }),
+    getSubtree: (root, id, depth, storage) => invoke("get_subtree", { root, id, depth, storage }),
     findFiles: (root, id, filter, limit) => invoke("find_files", { root, id, filter, limit }),
     findDuplicates: (root, id, minSize) => invoke("find_duplicates", { root, id, minSize }),
     cancelDuplicates: () => invoke("cancel_duplicates"),
