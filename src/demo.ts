@@ -2,7 +2,7 @@
 // Imita el comportamiento de crates/scanner: ids, hijos ordenados por tamaño y totales por carpeta.
 
 import type { Api } from "./api";
-import type { Category, Drive, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
+import type { Category, Change, Drive, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -235,7 +235,7 @@ export function demoApi(): Api {
         const used = trees[root]?.entries[0].size ?? (root === "C:\\" ? 0 : 1430 * GB);
         return {
           root, name: root === "C:\\" ? "Windows" : "Datos", total: caps[root], available: caps[root] - used,
-          kind: root === "C:\\" ? "SSD" : "HDD", removable: false, fileSystem: "NTFS", scanned: !!trees[root],
+          kind: root === "C:\\" ? "SSD" : "HDD", removable: false, fileSystem: "NTFS", scanned: !!trees[root], scannedAt: trees[root] ? Math.floor(Date.now() / 1000) - 3600 : null,
         };
       });
     },
@@ -354,6 +354,34 @@ export function demoApi(): Api {
     async moveToTrash(root, ids) {
       const t = tree(root);
       return ids.reduce((a, i) => a + t.remove(i), 0);
+    },
+    async onLoaded() { return () => {}; },
+    async onChanges() { return () => {}; },
+    async getChanges(root) {
+      if (!trees[root]) return null;
+      const now = Math.floor(Date.now() / 1000);
+      const f = (name: string, old: number, nw: number, children: Change[] = [], isDir = true): Change =>
+        ({ name, isDir, old, new: nw, existed: old > 0, exists: nw > 0, children });
+      const used = trees[root].entries[0].size;
+      return {
+        root, from: now - 9 * 86400, to: now,
+        tree: f(root, used - 31.4 * GB, used, [
+          f("Users", 212 * GB, 236.5 * GB, [
+            f("Eliecer", 205 * GB, 229.5 * GB, [
+              f("Videos", 61 * GB, 79.2 * GB, [f("grabacion-pantalla-2026-11.mp4", 0, 14.6 * GB, [], false), f("Capturas", 2.1 * GB, 5.7 * GB)]),
+              f("Downloads", 18 * GB, 24.9 * GB, [f("win11-24h2.iso", 0, 5.8 * GB, [], false), f("instalador-juego.exe", 1.2 * GB, 0, [], false)]),
+              f("Projects", 30 * GB, 29.1 * GB),
+            ]),
+          ]),
+          f("Windows", 31 * GB, 34.2 * GB, [f("SoftwareDistribution", 1.1 * GB, 4.3 * GB)]),
+          f("Windows.old", 9.3 * GB, 0),
+        ]),
+      };
+    },
+    async locate(root, path) {
+      const t = tree(root);
+      const rel = path.startsWith(root) ? path.slice(root.length) : path;
+      return t.find(rel.replace(/\\/g, "/")) ?? null;
     },
   };
 }

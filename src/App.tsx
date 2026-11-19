@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { apiPromise, type Api } from "./api";
 import { Toast } from "./components";
 import { CommandPalette } from "./views/CommandPalette";
+import { Changes } from "./views/Changes";
 import { Clean } from "./views/Clean";
 import { Explore } from "./views/Explore";
 import { Home } from "./views/Home";
 import { Types } from "./views/Types";
 import type { Drive, NodeInfo, ScanDone, ScanProgress } from "./types";
 
-export type View = "home" | "explore" | "clean" | "types";
+export type View = "home" | "explore" | "clean" | "types" | "changes";
 
 /** Lo que comparten todas las vistas. */
 export interface Ctx {
@@ -35,12 +36,13 @@ const NAV: { view: View; label: string; icon: ReactNode }[] = [
   { view: "explore", label: "Explorar", icon: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18M12 12h9" /></> },
   { view: "clean", label: "Limpiar", icon: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /> },
   { view: "types", label: "Tipos de archivo", icon: <><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7 5" /></> },
+  { view: "changes", label: "Cambios", icon: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" /> },
 ];
 
 function readView(): View {
   try {
     const v = localStorage.getItem("awts-view");
-    if (v === "home" || v === "explore" || v === "clean" || v === "types") return v;
+    if (v === "home" || v === "explore" || v === "clean" || v === "types" || v === "changes") return v;
   } catch { /* almacenamiento no disponible */ }
   return "home";
 }
@@ -80,6 +82,9 @@ export default function App() {
         refreshDrives();
         bump();
       }),
+      // Un análisis guardado se abrió, o hay una comparación nueva: las vistas se actualizan.
+      api.onLoaded(() => { refreshDrives(); bump(); }),
+      api.onChanges(() => bump()),
     ];
     return () => { subs.forEach((s) => s.then((off) => off())); };
   }, [api, refreshDrives, bump]);
@@ -167,6 +172,7 @@ export default function App() {
           {view === "explore" && <Explore ctx={ctx} target={target} />}
           {view === "clean" && <Clean ctx={ctx} />}
           {view === "types" && <Types ctx={ctx} />}
+          {view === "changes" && <Changes ctx={ctx} />}
         </main>
       </div>
       {palette && root && <CommandPalette ctx={ctx} root={root} onClose={() => setPalette(false)} />}

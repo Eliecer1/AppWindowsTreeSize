@@ -11,6 +11,8 @@ export interface Drive {
   removable: boolean;
   fileSystem: string;
   scanned: boolean;
+  /** Fecha (segundos Unix) del análisis abierto, que puede venir de un análisis guardado. */
+  scannedAt?: number | null;
 }
 
 export interface NodeInfo {
@@ -74,4 +76,22 @@ export interface Suggestion {
   size: number;
   ids: number[];
   manualHint: string | null;
+}
+
+/** Un elemento que cambió entre dos análisis. */
+export interface Change {
+  name: string;
+  isDir: boolean;
+  old: number;
+  new: number;
+  existed: boolean;
+  exists: boolean;
+  children: Change[];
+}
+
+export interface Changes {
+  root: string;
+  from: number;
+  to: number;
+  tree: Change;
 }

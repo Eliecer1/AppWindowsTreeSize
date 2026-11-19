@@ -9,10 +9,14 @@
 //! carpetas (hijos, totales por tipo) se guardan aparte, solo para ellas.
 
 mod category;
+mod diff;
 mod disk;
+mod persist;
 
 pub use category::{extension, Category, Context};
+pub use diff::{diff, Change};
 pub use disk::{FileStat, RawEntry, Volume};
+pub use persist::{load, read_header, save, Header};
 
 use rayon::prelude::*;
 use serde::Serialize;
@@ -99,6 +103,8 @@ pub struct Tree {
     seen: HashMap<u64, NodeId>,
     /// Archivos con más de un nombre: identificador → elemento donde se contó su espacio.
     links: HashMap<u64, NodeId>,
+    /// Cuándo terminó el último análisis completo, en segundos Unix (0 si todavía no terminó).
+    scanned_at: i64,
 }
 
 /// Lo que se agrega al árbol de un archivo leído del disco.
@@ -230,6 +236,7 @@ impl Tree {
             live: true,
             seen: HashMap::new(),
             links: HashMap::new(),
+            scanned_at: 0,
         };
         t.add_dir(NO_PARENT, &root.to_string_lossy());
         t
@@ -238,6 +245,17 @@ impl Tree {
     /// Todavía hay un escaneo escribiendo en el árbol.
     pub fn is_live(&self) -> bool {
         self.live
+    }
+
+    /// Cuándo terminó el último análisis completo, en segundos Unix (0 si todavía no terminó).
+    pub fn scanned_at(&self) -> i64 {
+        self.scanned_at
+    }
+
+    /// Elementos que siguen en el árbol (sin contar lo que se borró o se reemplazó al refrescar).
+    pub fn attached_len(&self) -> usize {
+        let d = &self.dirs[0];
+        (1 + d.files + d.dirs) as usize
     }
 
     pub fn root_path(&self) -> &Path {
@@ -609,6 +627,12 @@ impl Tree {
         }
         self.seen = HashMap::new();
         self.live = false;
+        if id == Self::ROOT {
+            self.scanned_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+        }
     }
 
     fn sort_children(&mut self, id: NodeId) {
@@ -953,5 +977,46 @@ mod tests {
     #[test]
     fn nodes_are_compact() {
         assert_eq!(std::mem::size_of::<Node>(), 40);
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let (d, mut t) = sample();
+        // Lo borrado no se guarda.
+        t.remove(t.find(Path::new("Descargas")).unwrap());
+        let file = d.path().join("guardado.awts");
+        save(&t, &file).unwrap();
+        assert_eq!(read_header(&file).unwrap().root, d.path());
+        let l = load(&file).unwrap();
+        assert_eq!(l.len(), t.attached_len());
+        assert_eq!(l.scanned_at(), t.scanned_at());
+        assert!(l.scanned_at() > 0);
+        let (a, b) = (t.info(Tree::ROOT).unwrap(), l.info(Tree::ROOT).unwrap());
+        assert_eq!((a.size, a.logical, a.files, a.dirs), (b.size, b.logical, b.files, b.dirs));
+        let names = |t: &Tree| t.children(Tree::ROOT, 0, 100).into_iter().map(|k| (k.name, k.size)).collect::<Vec<_>>();
+        assert_eq!(names(&t), names(&l));
+        assert_eq!(l.categories(Tree::ROOT).len(), t.categories(Tree::ROOT).len());
+        let clip = l.find(Path::new("Videos/clip.MKV")).unwrap();
+        assert_eq!(l.path_of(clip), d.path().join("Videos").join("clip.MKV"));
+        assert!(l.find(Path::new("Descargas")).is_none());
+        // Un archivo dañado se rechaza sin romper nada.
+        fs::write(&file, b"no es un analisis").unwrap();
+        assert!(load(&file).is_err());
+    }
+
+    #[test]
+    fn diff_shows_what_grew_and_what_was_deleted() {
+        let (d, before) = sample();
+        write(&d.path().join("Videos/nuevo.mp4"), 500_000);
+        fs::remove_dir_all(d.path().join("Descargas")).unwrap();
+        let after = scan(d.path(), &Progress::default());
+        let c = diff(&before, &after, 1);
+        assert!(c.delta() > 400_000);
+        assert_eq!(c.children[0].name, "Videos");
+        assert!(c.children[0].children.iter().any(|k| k.name == "nuevo.mp4" && !k.existed));
+        let dl = c.children.iter().find(|k| k.name == "Descargas").unwrap();
+        assert!(dl.existed && !dl.exists && dl.new == 0);
+        // Lo que no cambió no aparece.
+        assert!(c.children.iter().all(|k| k.name != "AppData"));
     }
 }

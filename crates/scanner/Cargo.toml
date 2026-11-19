@@ -6,6 +6,7 @@ license.workspace = true
 description = "Motor de escaneo de discos de AppWindowsTreeSize"
 
 [dependencies]
+lz4_flex = "0.14"
 rayon = "1.12"
 serde = { version = "1", features = ["derive"] }
 

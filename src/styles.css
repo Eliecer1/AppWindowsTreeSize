@@ -229,3 +229,17 @@ main { padding: 20px; min-width: 0; overflow: auto; }
   .summary { position: static; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+/* Cambios entre análisis */
+.changes-sum { display: flex; gap: 20px; align-items: center; }
+.bignum.up, .num.up { color: var(--warn); }
+.bignum.down, .num.down { color: var(--ok); }
+.changes-list { padding: 6px; }
+.change-row { grid-template-columns: minmax(0, 1fr) auto auto 76px; }
+.change-row .nm { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 0; text-align: left; color: inherit; font: inherit; min-width: 0; }
+.change-row .nm:not(:disabled) { cursor: pointer; }
+.change-row .nm:not(:disabled):hover .t { text-decoration: underline; }
+.change-row .nm .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-row .num { font-family: var(--f-num); font-size: 12px; white-space: nowrap; }
+.change-row .bar { grid-column: 1 / -1; }
+.btn.small { padding: 4px 10px; font-size: 12px; }

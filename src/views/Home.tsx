@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
 import { CloudIcon, Legend, Ring, StackBar } from "../components";
-import { CATEGORY, driveLabel, driveLetter, int, pct, seconds, size } from "../format";
+import { CATEGORY, dateTime, driveLabel, driveLetter, int, pct, seconds, size } from "../format";
 import type { CategorySize, Drive, NodeInfo } from "../types";
 
 function ScanStatus({ ctx, drive }: { ctx: Ctx; drive: Drive }) {
@@ -25,6 +25,9 @@ function ScanStatus({ ctx, drive }: { ctx: Ctx; drive: Drive }) {
         {done.errors > 0 && <> · {int(done.errors)} carpetas sin permiso de lectura</>}
       </small>
     );
+  }
+  if (drive.scanned && drive.scannedAt) {
+    return <small className="muted">Análisis guardado del {dateTime(drive.scannedAt)}. Analiza de nuevo para ver los cambios.</small>;
   }
   return <small className="muted">{drive.scanned ? "Análisis listo." : "Todavía no se ha analizado este disco."}</small>;
 }

@@ -1,4 +1,4 @@
-import type { Drive, FolderView, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
+import type { Changes, Drive, FolderView, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
 import { demoApi } from "./demo";
 
 /** Lo que la interfaz necesita del motor. En la app de escritorio lo cumple Rust; en el navegador, datos de ejemplo. */
@@ -18,6 +18,14 @@ export interface Api {
   cleanupSuggestions(root: string): Promise<Suggestion[]>;
   openInExplorer(path: string, isDir: boolean): Promise<void>;
   moveToTrash(root: string, ids: number[]): Promise<number>;
+  /** Un análisis guardado terminó de abrirse al iniciar la app. */
+  onLoaded(cb: (root: string) => void): Promise<() => void>;
+  /** Hay una comparación nueva con el análisis anterior. */
+  onChanges(cb: (root: string) => void): Promise<() => void>;
+  /** Qué cambió desde el análisis anterior; null si todavía no hay dos análisis. */
+  getChanges(root: string): Promise<Changes | null>;
+  /** Id de una ruta dentro del análisis, o null si ya no está. */
+  locate(root: string, path: string): Promise<number | null>;
 }
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -40,6 +48,10 @@ async function tauriApi(): Promise<Api> {
     cleanupSuggestions: (root) => invoke("cleanup_suggestions", { root }),
     openInExplorer: (path, isDir) => invoke("open_in_explorer", { path, isDir }),
     moveToTrash: (root, ids) => invoke("move_to_trash", { root, ids }),
+    onLoaded: (cb) => listen<{ root: string }>("scan://loaded", (e) => cb(e.payload.root)),
+    onChanges: (cb) => listen<string>("scan://changes", (e) => cb(e.payload)),
+    getChanges: (root) => invoke("get_changes", { root }),
+    locate: (root, path) => invoke("locate", { root, path }),
   };
 }
 

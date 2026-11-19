@@ -1,4 +1,5 @@
 mod cleanup;
+mod saved;
 
 use scanner::{CategorySize, NodeId, NodeInfo, Progress, Tree};
 use serde::Serialize;
@@ -38,19 +39,25 @@ struct DriveInfo {
     removable: bool,
     file_system: String,
     scanned: bool,
+    /// Fecha del análisis que hay abierto (puede venir de un análisis guardado).
+    scanned_at: Option<i64>,
 }
 
 #[tauri::command]
 fn list_drives(state: State<AppState>) -> Vec<DriveInfo> {
     let disks = sysinfo::Disks::new_with_refreshed_list();
-    let trees = state.trees.lock().unwrap();
+    let scanned: HashMap<String, Option<i64>> = {
+        let roots: Vec<String> = state.trees.lock().unwrap().keys().cloned().collect();
+        roots.into_iter().map(|r| (r.clone(), saved::scanned_at(&state, &r))).collect()
+    };
     let mut out: Vec<DriveInfo> = disks
         .iter()
         .filter(|d| d.total_space() > 0)
         .map(|d| {
             let root = d.mount_point().to_string_lossy().into_owned();
             DriveInfo {
-                scanned: trees.contains_key(&root),
+                scanned: scanned.contains_key(&root),
+                scanned_at: scanned.get(&root).copied().flatten(),
                 name: d.name().to_string_lossy().into_owned(),
                 total: d.total_space(),
                 available: d.available_space(),
@@ -140,6 +147,9 @@ fn start_scan(root: String, app: AppHandle, state: State<AppState>) -> Result<()
 
         let state = app.state::<AppState>();
         *state.running.lock().unwrap() = None;
+        if !progress.is_cancelled() {
+            saved::after_scan(app.clone(), root.clone(), tree.clone());
+        }
         let _ = app.emit(
             "scan://done",
             ScanDone {
@@ -204,11 +214,30 @@ async fn get_folder(root: String, id: NodeId, limit: usize, state: State<'_, App
 
 /// Vuelve a leer del disco solo una carpeta. Devuelve `None` si la carpeta ya no existe.
 #[tauri::command]
-async fn rescan_folder(root: String, id: NodeId, state: State<'_, AppState>) -> Result<Option<NodeId>, String> {
+async fn rescan_folder(root: String, id: NodeId, app: AppHandle, state: State<'_, AppState>) -> Result<Option<NodeId>, String> {
     let tree = state.tree(&root)?;
-    tauri::async_runtime::spawn_blocking(move || scanner::rescan(&tree, id, &Progress::default()))
+    let t = tree.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || scanner::rescan(&t, id, &Progress::default()))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    saved::schedule(&app, &root, tree);
+    Ok(r)
+}
+
+/// Id de una ruta dentro del análisis de `root`, o `None` si ya no está.
+#[tauri::command]
+async fn locate(root: String, path: String, state: State<'_, AppState>) -> Result<Option<NodeId>, String> {
+    query(&state, &root, move |t| {
+        let rel = Path::new(&path).strip_prefix(t.root_path()).ok()?.to_path_buf();
+        t.find(&rel)
+    })
+    .await
+}
+
+/// Lo que cambió en el disco desde el análisis anterior, o `None` si todavía no hay dos análisis.
+#[tauri::command]
+async fn get_changes(root: String, app: AppHandle) -> Option<serde_json::Value> {
+    tauri::async_runtime::spawn_blocking(move || saved::changes(&app, &root)).await.ok().flatten()
 }
 
 #[tauri::command]
@@ -262,9 +291,10 @@ fn open_in_explorer(path: String, is_dir: bool) -> Result<(), String> {
 /// El árbol solo se bloquea un instante al principio y al final: mientras Windows mueve los archivos,
 /// la interfaz se puede seguir usando.
 #[tauri::command]
-async fn move_to_trash(root: String, ids: Vec<NodeId>, state: State<'_, AppState>) -> Result<u64, String> {
+async fn move_to_trash(root: String, ids: Vec<NodeId>, app: AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
     let tree = state.tree(&root)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let saved_tree = tree.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || {
         let targets: Vec<(NodeId, PathBuf)> = {
             let t = tree.read().unwrap_or_else(|e| e.into_inner());
             ids.into_iter().filter(|id| t.attached(*id) && *id != Tree::ROOT).map(|id| (id, t.path_of(id))).collect()
@@ -288,13 +318,19 @@ async fn move_to_trash(root: String, ids: Vec<NodeId>, state: State<'_, AppState
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    saved::schedule(&app, &root, saved_tree);
+    r
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .setup(|app| {
+            saved::load_all(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_drives,
             start_scan,
@@ -307,6 +343,8 @@ pub fn run() {
             cleanup_suggestions,
             open_in_explorer,
             move_to_trash,
+            get_changes,
+            locate,
         ])
         .run(tauri::generate_context!())
         .expect("no se pudo iniciar AppWindowsTreeSize");

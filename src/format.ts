@@ -41,6 +41,22 @@ export function date(unixSecs: number): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/** Fecha con hora: "12 nov 2026, 18:05". Si es de hoy o de ayer, lo dice así. */
+export function dateTime(unixSecs: number): string {
+  if (!unixSecs) return "—";
+  const d = new Date(unixSecs * 1000);
+  const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return `hoy a las ${hm}`;
+  if (same(d, yesterday)) return `ayer a las ${hm}`;
+  return `${date(unixSecs)}, ${hm}`;
+}
+
+/** Diferencia con signo: "+1,2 GB" o "−300 MB". */
+export const delta = (bytes: number) => (bytes >= 0 ? "+" : "−") + size(Math.abs(bytes));
+
 /** "C:\\" → "C:" */
 export const driveLetter = (root: string) => root.replace(/[\\/]+$/, "") || root;
 
