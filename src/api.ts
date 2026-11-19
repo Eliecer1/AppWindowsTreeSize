@@ -1,4 +1,4 @@
-import type { Changes, Drive, FolderView, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
+import type { Changes, Drive, DupGroup, DupProgress, FileFilter, FolderView, NodeInfo, ScanDone, ScanProgress, SubNode, Suggestion } from "./types";
 import { demoApi } from "./demo";
 
 /** Lo que la interfaz necesita del motor. En la app de escritorio lo cumple Rust; en el navegador, datos de ejemplo. */
@@ -29,6 +29,21 @@ export interface Api {
   isAdmin(): Promise<boolean>;
   /** Vuelve a abrir la app como administrador (Windows pide confirmación). */
   restartAsAdmin(): Promise<void>;
+  getSubtree(root: string, id: number, depth: number): Promise<SubNode | null>;
+  findFiles(root: string, id: number, filter: FileFilter, limit: number): Promise<NodeInfo[]>;
+  findDuplicates(root: string, id: number, minSize: number): Promise<DupGroup[]>;
+  cancelDuplicates(): Promise<void>;
+  onDupProgress(cb: (p: DupProgress) => void): Promise<() => void>;
+  /** Guarda un informe CSV o HTML (según la extensión de `path`). */
+  exportReport(root: string, id: number, path: string): Promise<void>;
+  deletePermanently(root: string, ids: number[]): Promise<number>;
+  emptyRecycleBin(): Promise<void>;
+  /** Carpeta con la que se abrió la app desde el clic derecho del Explorador. */
+  startupPath(): Promise<string | null>;
+  /** Pide una carpeta con el diálogo de Windows. */
+  pickFolder(): Promise<string | null>;
+  /** Pide dónde guardar un informe. */
+  pickSavePath(defaultName: string): Promise<string | null>;
 }
 
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -57,6 +72,28 @@ async function tauriApi(): Promise<Api> {
     locate: (root, path) => invoke("locate", { root, path }),
     isAdmin: () => invoke("is_admin"),
     restartAsAdmin: () => invoke("restart_as_admin"),
+    getSubtree: (root, id, depth) => invoke("get_subtree", { root, id, depth }),
+    findFiles: (root, id, filter, limit) => invoke("find_files", { root, id, filter, limit }),
+    findDuplicates: (root, id, minSize) => invoke("find_duplicates", { root, id, minSize }),
+    cancelDuplicates: () => invoke("cancel_duplicates"),
+    onDupProgress: (cb) => listen<DupProgress>("dups://progress", (e) => cb(e.payload)),
+    exportReport: (root, id, path) => invoke("export_report", { root, id, path }),
+    deletePermanently: (root, ids) => invoke("delete_permanently", { root, ids }),
+    emptyRecycleBin: () => invoke("empty_recycle_bin"),
+    startupPath: () => invoke("startup_path"),
+    pickFolder: async () => {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const r = await open({ directory: true, multiple: false, title: "Elige la carpeta que quieres analizar" });
+      return typeof r === "string" ? r : null;
+    },
+    pickSavePath: async (defaultName) => {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      return save({
+        title: "Guardar informe",
+        defaultPath: defaultName,
+        filters: [{ name: "Página web", extensions: ["html"] }, { name: "Hoja de cálculo (CSV)", extensions: ["csv"] }],
+      });
+    },
   };
 }
 

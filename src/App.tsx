@@ -4,12 +4,15 @@ import { Toast } from "./components";
 import { CommandPalette } from "./views/CommandPalette";
 import { Changes } from "./views/Changes";
 import { Clean } from "./views/Clean";
+import { Duplicates } from "./views/Duplicates";
+import { Files } from "./views/Files";
 import { Explore } from "./views/Explore";
 import { Home } from "./views/Home";
 import { Types } from "./views/Types";
 import type { Drive, NodeInfo, ScanDone, ScanProgress } from "./types";
 
-export type View = "home" | "explore" | "clean" | "types" | "changes";
+export type View = "home" | "explore" | "files" | "duplicates" | "clean" | "types" | "changes";
+const VIEWS: View[] = ["home", "explore", "files", "duplicates", "clean", "types", "changes"];
 
 /** Lo que comparten todas las vistas. */
 export interface Ctx {
@@ -24,6 +27,8 @@ export interface Ctx {
   /** Sube cada poco mientras hay un análisis en curso, para que las vistas muestren los tamaños en vivo. */
   live: number;
   startScan: (root: string) => void;
+  /** Pide una carpeta con el diálogo de Windows y la analiza. */
+  scanFolder: () => void;
   explore: (root: string, id?: number, select?: NodeInfo) => void;
   go: (v: View) => void;
   toast: (text: string, error?: boolean) => void;
@@ -37,6 +42,8 @@ export interface Ctx {
 const NAV: { view: View; label: string; icon: ReactNode }[] = [
   { view: "home", label: "Inicio", icon: <path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z" /> },
   { view: "explore", label: "Explorar", icon: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18M12 12h9" /></> },
+  { view: "files", label: "Archivos", icon: <><path d="M6 2.5h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-17a1 1 0 0 1 1-1z" /><path d="M9 13h6M9 17h4" /></> },
+  { view: "duplicates", label: "Duplicados", icon: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" /></> },
   { view: "clean", label: "Limpiar", icon: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /> },
   { view: "types", label: "Tipos de archivo", icon: <><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7 5" /></> },
   { view: "changes", label: "Cambios", icon: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" /> },
@@ -45,7 +52,7 @@ const NAV: { view: View; label: string; icon: ReactNode }[] = [
 function readView(): View {
   try {
     const v = localStorage.getItem("awts-view");
-    if (v === "home" || v === "explore" || v === "clean" || v === "types" || v === "changes") return v;
+    if (VIEWS.includes(v as View)) return v as View;
   } catch { /* almacenamiento no disponible */ }
   return "home";
 }
@@ -72,6 +79,21 @@ export default function App() {
   const refreshDrives = useCallback(async () => {
     if (!api) return;
     try { setDrives(await api.listDrives()); } catch (e) { toast(String(e), true); }
+  }, [api, toast]);
+
+  // Abierta desde "Analizar con AppWindowsTreeSize" en el Explorador: analiza esa carpeta y la muestra.
+  useEffect(() => {
+    if (!api) return;
+    api.startupPath().then(async (p) => {
+      if (!p) return;
+      setScanning({ root: p, files: 0, dirs: 0, bytes: 0, elapsedMs: 0 });
+      try {
+        await api.startScan(p);
+        setActiveRoot(p);
+        setTarget({ root: p, id: 0, at: Date.now() });
+        setView("explore");
+      } catch (e) { setScanning(null); toast(String(e), true); }
+    }).catch(() => {});
   }, [api, toast]);
 
   useEffect(() => {
@@ -134,6 +156,13 @@ export default function App() {
         refreshDrives();
       } catch (e) { setScanning(null); toast(String(e), true); }
     },
+    scanFolder: async () => {
+      try {
+        const dir = await api.pickFolder();
+        if (dir) ctx.startScan(dir);
+        else if (api.isDemo) toast("En la app de escritorio se abre el diálogo para elegir una carpeta.");
+      } catch (e) { toast(String(e), true); }
+    },
     explore: (r, id = 0, select) => {
       setActiveRoot(r);
       setTarget({ root: r, id, select, at: Date.now() });
@@ -180,6 +209,8 @@ export default function App() {
           {view === "clean" && <Clean ctx={ctx} />}
           {view === "types" && <Types ctx={ctx} />}
           {view === "changes" && <Changes ctx={ctx} />}
+          {view === "files" && <Files ctx={ctx} />}
+          {view === "duplicates" && <Duplicates ctx={ctx} />}
         </main>
       </div>
       {palette && root && <CommandPalette ctx={ctx} root={root} onClose={() => setPalette(false)} />}

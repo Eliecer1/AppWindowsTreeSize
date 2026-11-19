@@ -13,11 +13,13 @@ mod diff;
 mod disk;
 pub mod mft;
 mod persist;
+mod tools;
 
 pub use category::{extension, Category, Context};
 pub use diff::{diff, Change};
 pub use disk::{FileStat, RawEntry, Volume};
 pub use persist::{load, read_header, save, Header};
+pub use tools::{duplicates, export_csv, export_html, DupGroup, FileFilter, SubNode};
 
 use rayon::prelude::*;
 use serde::Serialize;

@@ -93,7 +93,10 @@ export function Home({ ctx }: { ctx: Ctx }) {
         <div className="actions">
           {ctx.scanning
             ? <button className="btn" onClick={() => api.cancelScan()}>Cancelar análisis</button>
-            : <button className="btn primary" onClick={() => ctx.startScan(primary.root)}>{primary.scanned ? "Analizar de nuevo" : `Analizar ${driveLetter(primary.root)}`}</button>}
+            : <>
+                <button className="btn" onClick={ctx.scanFolder}>Analizar una carpeta…</button>
+                <button className="btn primary" onClick={() => ctx.startScan(primary.root)}>{primary.scanned ? "Analizar de nuevo" : `Analizar ${driveLetter(primary.root)}`}</button>
+              </>}
         </div>
       </div>
 
@@ -148,16 +151,22 @@ export function Home({ ctx }: { ctx: Ctx }) {
         </section>
 
         <section className="card b-drives">
-          <span className="eyebrow">Otros discos</span>
+          <span className="eyebrow">Otros discos y carpetas</span>
           {others.length === 0 && <p className="muted" style={{ margin: 0 }}>No hay más discos conectados.</p>}
           {others.map((d) => (
             <div className="mini-drive" key={d.root}>
               <header>
-                <b>{driveLabel(d)}</b>
+                <b>{d.folder ? d.name : driveLabel(d)}</b>
                 <span className="chip">{d.removable ? "Extraíble" : d.kind}</span>
               </header>
-              <div className="progress"><i style={{ width: `${pct(d.total - d.available, d.total)}%` }} /></div>
-              <small className="muted"><span className="num">{size(d.total - d.available)}</span> de <span className="num">{size(d.total)}</span></small>
+              {d.folder ? (
+                <small className="muted" title={d.root}><span className="num">{size(d.total)}</span> en {d.root}</small>
+              ) : (
+                <>
+                  <div className="progress"><i style={{ width: `${pct(d.total - d.available, d.total)}%` }} /></div>
+                  <small className="muted"><span className="num">{size(d.total - d.available)}</span> de <span className="num">{size(d.total)}</span></small>
+                </>
+              )}
               {ctx.scanning?.root === d.root ? <ScanStatus ctx={ctx} drive={d} /> : (
                 <div className="actions">
                   {d.scanned && <button className="btn" onClick={() => ctx.explore(d.root)}>Explorar</button>}

@@ -13,6 +13,8 @@ export interface Drive {
   scanned: boolean;
   /** Fecha (segundos Unix) del análisis abierto, que puede venir de un análisis guardado. */
   scannedAt?: number | null;
+  /** Es una carpeta analizada, no una unidad entera. */
+  folder?: boolean;
 }
 
 export interface NodeInfo {
@@ -78,6 +80,27 @@ export interface Suggestion {
   size: number;
   ids: number[];
   manualHint: string | null;
+  /** Acción especial en lugar de la papelera, por ejemplo "empty-recycle-bin". */
+  action?: string | null;
+}
+
+export interface FileFilter {
+  minSize?: number;
+  olderThanDays?: number;
+  category?: Category | null;
+  ext?: string | null;
+}
+
+export interface DupGroup {
+  size: number;
+  wasted: number;
+  files: NodeInfo[];
+}
+
+export interface DupProgress {
+  candidates: number;
+  checked: number;
+  bytes: number;
 }
 
 /** Un elemento que cambió entre dos análisis. */
@@ -96,4 +119,14 @@ export interface Changes {
   from: number;
   to: number;
   tree: Change;
+}
+
+/** Una carpeta con varios niveles de hijos, para el mapa anidado y los anillos. */
+export interface SubNode {
+  id: number;
+  name: string;
+  size: number;
+  category: Category;
+  isDir: boolean;
+  children: SubNode[];
 }

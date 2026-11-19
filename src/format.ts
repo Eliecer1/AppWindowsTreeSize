@@ -58,7 +58,12 @@ export function dateTime(unixSecs: number): string {
 export const delta = (bytes: number) => (bytes >= 0 ? "+" : "−") + size(Math.abs(bytes));
 
 /** "C:\\" → "C:" */
-export const driveLetter = (root: string) => root.replace(/[\\/]+$/, "") || root;
+export const driveLetter = (root: string) => {
+  const r = root.replace(/[\\/]+$/, "") || root;
+  // Una carpeta analizada ("D:\\Fotos\\2024") se nombra por su última parte.
+  const parts = r.split(/[\\/]/);
+  return parts.length > 1 ? parts[parts.length - 1] : r;
+};
 
 export function driveLabel(d: { root: string; name: string }) {
   const letter = driveLetter(d.root);

@@ -85,7 +85,7 @@ fn read_boot(r: &impl ReadAt) -> io::Result<Boot> {
     let cluster = sector * spc;
     let cpr = b[0x40] as i8;
     let record = if cpr > 0 { cpr as u64 * cluster } else { 1u64 << (-(cpr as i32)) } as usize;
-    if cluster == 0 || !(256..=65536).contains(&record) || record % 512 != 0 {
+    if cluster == 0 || !(256..=65536).contains(&record) || !record.is_multiple_of(512) {
         return Err(bad("Geometría NTFS no válida"));
     }
     Ok(Boot { cluster, record, mft_offset: u64_at(&b, 0x30) * cluster })

@@ -51,7 +51,11 @@ export function Clean({ ctx }: { ctx: Ctx }) {
   const run = async () => {
     setWorking(true);
     try {
-      const got = await api.moveToTrash(root, selected.flatMap((s) => s.ids));
+      let got = 0;
+      const ids = selected.filter((s) => !s.action).flatMap((s) => s.ids);
+      if (ids.length) got += await api.moveToTrash(root, ids);
+      const bin = selected.find((s) => s.action === "empty-recycle-bin");
+      if (bin) { await api.emptyRecycleBin(); got += bin.size; }
       setFreed((f) => f + got);
       ctx.toast(`Listo: liberaste ${size(got)}. Todo está en la papelera de reciclaje.`);
       ctx.bump();
@@ -106,11 +110,14 @@ export function Clean({ ctx }: { ctx: Ctx }) {
         <aside className="card summary">
           <span className="eyebrow">Seleccionado</span>
           <div className="bignum">{size(total)}</div>
-          <p style={{ margin: 0 }} className="muted">{selected.length} grupos. Todo va a la papelera de reciclaje, así que puedes recuperarlo.</p>
+          <p style={{ margin: 0 }} className="muted">{selected.length} grupos. Todo va a la papelera de reciclaje, así que puedes recuperarlo (salvo si eliges vaciarla).</p>
           {confirm ? (
             <div className="confirm">
               <b>¿Liberar {size(total)}?</b>
-              <span>Se enviarán a la papelera {selected.reduce((a, s) => a + s.ids.length, 0)} carpetas y archivos.</span>
+              <span>
+                {selected.some((s) => !s.action) && <>Se enviarán a la papelera {selected.reduce((a, s) => a + s.ids.length, 0)} carpetas y archivos. </>}
+                {selected.some((s) => s.action === "empty-recycle-bin") && <>La papelera de reciclaje se vaciará y lo que tiene ya no se podrá recuperar.</>}
+              </span>
               <div className="actions">
                 <button className="btn primary" disabled={working} onClick={run}>{working ? "Liberando…" : "Sí, liberar"}</button>
                 <button className="btn" disabled={working} onClick={() => setConfirm(false)}>Cancelar</button>

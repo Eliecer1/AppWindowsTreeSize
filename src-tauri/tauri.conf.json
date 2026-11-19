@@ -36,7 +36,7 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "nsis": { "languages": ["Spanish", "English"] }
+      "nsis": { "languages": ["Spanish", "English"], "installerHooks": "./windows/hooks.nsh" }
     }
   }
 }
