@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Grupo de archivos que la interfaz usa para colorear y resumir el espacio.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Video,
@@ -27,6 +27,21 @@ impl Category {
         Category::Cache,
         Category::Other,
     ];
+
+    /// Nombre para mostrar, igual que en la interfaz.
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Video => "Videos",
+            Category::Image => "Imágenes",
+            Category::App => "Programas y juegos",
+            Category::Archive => "Instaladores y comprimidos",
+            Category::System => "Sistema",
+            Category::Docs => "Documentos",
+            Category::Code => "Código y dependencias",
+            Category::Cache => "Caché y temporales",
+            Category::Other => "Otros",
+        }
+    }
 
     pub fn index(self) -> usize {
         self as usize

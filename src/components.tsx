@@ -1,6 +1,7 @@
+import { tr } from "./i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CATEGORY, pct, size } from "./format";
-import type { CategorySize, NodeInfo } from "./types";
+import { CATEGORY, int, pct, size } from "./format";
+import type { CategorySize, NodeInfo, SubNode } from "./types";
 
 export function Ring({ used, total, size: px = 150 }: { used: number; total: number; size?: number }) {
   const r = px / 2 - 10;
@@ -74,15 +75,25 @@ export function RefreshIcon({ px = 15, spin = false }: { px?: number; spin?: boo
 }
 
 /** Estado de un archivo: descargado en el disco o solo en la nube. */
-export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly"> }) {
+export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly" | "hardlink"> }) {
+  if (node.hardlink) {
+    return (
+      <span className="chip status link-st" title={tr("Es otro nombre de un archivo que ya se contó en otra carpeta. No ocupa espacio extra.", "Another name for a file already counted in another folder. It takes no extra space.")}>
+        <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+        </svg>
+        {tr("Ya contado", "Counted elsewhere")}
+      </span>
+    );
+  }
   return node.cloudOnly ? (
-    <span className="chip status cloud-st" title="No está descargado: no ocupa espacio en tu disco"><CloudIcon px={12} /> En la nube</span>
+    <span className="chip status cloud-st" title={tr("No está descargado: no ocupa espacio en tu disco", "Not downloaded: takes no space on your disk")}><CloudIcon px={12} /> {tr("En la nube", "In the cloud")}</span>
   ) : (
-    <span className="chip status disk-st" title="Está guardado en tu disco y ocupa espacio">
+    <span className="chip status disk-st" title={tr("Está guardado en tu disco y ocupa espacio", "Stored on your disk and takes space")}>
       <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="13" width="18" height="7" rx="2" /><path d="M5 13l2.5-8h9L19 13M7 16.5h.01" />
       </svg>
-      En el disco
+      {tr("En el disco", "On disk")}
     </span>
   );
 }
@@ -94,8 +105,8 @@ export function CloudNote({ node }: { node: { isDir: boolean; cloud: number; clo
     <p className="cloud-note">
       <CloudIcon />
       {node.cloudOnly
-        ? <>Está solo en la nube: pesa {size(node.logical)}, pero no ocupa espacio en tu disco.</>
-        : <>Además hay {size(node.cloud)} en {node.cloudFiles.toLocaleString("es-ES")} archivos que están solo en la nube y no ocupan espacio en tu disco.</>}
+        ? <>{tr(`Está solo en la nube: pesa ${size(node.logical)}, pero no ocupa espacio en tu disco.`, `Cloud only: it is ${size(node.logical)}, but takes no space on your disk.`)}</>
+        : <>{tr(`Además hay ${size(node.cloud)} en ${int(node.cloudFiles)} archivos que están solo en la nube y no ocupan espacio en tu disco.`, `Plus ${size(node.cloud)} in ${int(node.cloudFiles)} cloud-only files that take no space on your disk.`)}</>}
     </p>
   );
 }
@@ -141,7 +152,14 @@ export function squarify<T extends { size: number }>(items: T[], x: number, y: n
   return out;
 }
 
-export function Treemap({ items, onPick }: { items: NodeInfo[]; onPick: (n: NodeInfo) => void }) {
+/** Mapa de bloques. Con `nested`, los bloques grandes de carpetas muestran dentro lo que contienen. */
+export function Treemap({ items, onPick, nested, onPickId, onMenu }: {
+  items: NodeInfo[];
+  onPick: (n: NodeInfo) => void;
+  nested?: Map<number, SubNode>;
+  onPickId?: (id: number) => void;
+  onMenu?: (n: NodeInfo, x: number, y: number) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
@@ -153,14 +171,69 @@ export function Treemap({ items, onPick }: { items: NodeInfo[]; onPick: (n: Node
   }, []);
   const rects = squarify(items.filter((i) => i.size > 0).slice(0, 80), 0, 0, box.w, box.h);
   return (
-    <div className="treemap" ref={ref} aria-label="Mapa de espacio">
-      {rects.map(({ item, x, y, w, h }) => (
-        <button key={item.id} className={`tile ${w < 70 || h < 44 ? "small" : ""}`} title={`${item.name} · ${size(item.size)}`}
-          style={{ left: x, top: y, width: w, height: h, background: CATEGORY[item.category].color }} onClick={() => onPick(item)}>
-          <b>{item.name}</b>
-          <span>{size(item.size)}</span>
-        </button>
-      ))}
+    <div className="treemap" ref={ref} aria-label={tr("Mapa de espacio", "Space map")}>
+      {rects.map(({ item, x, y, w, h }) => {
+        const sub = nested?.get(item.id);
+        const inner = sub && w > 150 && h > 110 ? squarify(sub.children.filter((c) => c.size > 0).slice(0, 40), 6, 40, w - 12, h - 46) : [];
+        return (
+          <button key={item.id} className={`tile ${w < 70 || h < 44 ? "small" : ""} ${inner.length ? "nest" : ""}`} title={`${item.name} · ${size(item.size)}`}
+            style={{ left: x, top: y, width: w, height: h, background: CATEGORY[item.category].color }} onClick={() => onPick(item)}
+            onContextMenu={onMenu ? (e) => { e.preventDefault(); onMenu(item, e.clientX, e.clientY); } : undefined}>
+            <b>{item.name}</b>
+            <span>{size(item.size)}</span>
+            {inner.map((r) => (
+              <i key={r.item.id} className={`sub ${r.w < 60 || r.h < 30 ? "small" : ""}`} title={`${r.item.name} · ${size(r.item.size)}`}
+                style={{ left: r.x, top: r.y, width: r.w, height: r.h }}
+                onClick={(e) => { if (r.item.isDir && onPickId) { e.stopPropagation(); onPickId(r.item.id); } }}>
+                <em>{r.item.name}</em>
+              </i>
+            ))}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Anillos: el centro es la carpeta actual y cada anillo es un nivel más adentro. */
+export function Sunburst({ root, onPick }: { root: SubNode; onPick: (n: SubNode) => void }) {
+  const [hover, setHover] = useState<SubNode | null>(null);
+  const S = 520, C = S / 2, R0 = 70, W = (C - R0 - 4) / 4;
+  const arcs: { n: SubNode; a0: number; a1: number; depth: number }[] = [];
+  const walk = (n: SubNode, a0: number, a1: number, depth: number) => {
+    const total = n.size || 1;
+    let a = a0;
+    for (const c of n.children) {
+      const span = ((a1 - a0) * c.size) / total;
+      if (span > 0.004) {
+        arcs.push({ n: c, a0: a, a1: a + span, depth });
+        if (depth < 3) walk(c, a, a + span, depth + 1);
+      }
+      a += span;
+    }
+  };
+  walk(root, 0, Math.PI * 2, 0);
+  const pt = (r: number, a: number) => `${C + r * Math.sin(a)} ${C - r * Math.cos(a)}`;
+  const path = (a0: number, a1: number, r0: number, r1: number) => {
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    // Un arco completo no se puede dibujar de una vez: se deja un hueco mínimo.
+    const e = a1 - a0 >= Math.PI * 2 ? a1 - 0.0001 : a1;
+    return `M ${pt(r0, a0)} L ${pt(r1, a0)} A ${r1} ${r1} 0 ${large} 1 ${pt(r1, e)} L ${pt(r0, e)} A ${r0} ${r0} 0 ${large} 0 ${pt(r0, a0)} Z`;
+  };
+  const shown = hover ?? root;
+  return (
+    <div className="sunburst">
+      <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label={tr("Anillos de espacio", "Space rings")}>
+        {arcs.map(({ n, a0, a1, depth }) => (
+          <path key={`${depth}-${n.id}`} d={path(a0, a1, R0 + depth * W + 1, R0 + (depth + 1) * W - 1)} fill={CATEGORY[n.category].color}
+            opacity={1 - depth * 0.16} className={n.isDir ? "dir" : ""} onMouseEnter={() => setHover(n)} onMouseLeave={() => setHover(null)} onClick={() => onPick(n)}>
+            <title>{`${n.name} · ${size(n.size)}`}</title>
+          </path>
+        ))}
+        <circle cx={C} cy={C} r={R0 - 4} className="hub" />
+        <text x={C} y={C - 4} textAnchor="middle" className="hub-name">{shown.name.length > 18 ? shown.name.slice(0, 17) + "…" : shown.name}</text>
+        <text x={C} y={C + 18} textAnchor="middle" className="hub-size">{size(shown.size)}</text>
+      </svg>
     </div>
   );
 }

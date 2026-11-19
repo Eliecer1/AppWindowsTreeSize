@@ -24,6 +24,8 @@ pub struct Suggestion {
     pub ids: Vec<NodeId>,
     /// Qué hacer cuando no se puede borrar directamente.
     pub manual_hint: Option<String>,
+    /// Acción especial que hace la app en lugar de enviar a la papelera (por ejemplo, vaciarla).
+    pub action: Option<String>,
 }
 
 struct Builder<'a> {
@@ -33,7 +35,7 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     fn size(&self, ids: &[NodeId]) -> u64 {
-        ids.iter().filter_map(|i| self.tree.entry(*i)).map(|e| e.size).sum()
+        ids.iter().map(|i| self.tree.size(*i)).sum()
     }
 
     fn add(&mut self, key: &str, title: &str, description: &str, risk: Risk, ids: Vec<NodeId>) {
@@ -47,6 +49,7 @@ impl Builder<'_> {
                 size,
                 ids,
                 manual_hint: None,
+                action: None,
             });
         }
     }
@@ -62,8 +65,30 @@ impl Builder<'_> {
                 size,
                 ids: Vec::new(),
                 manual_hint: Some(hint.into()),
+                action: None,
             });
         }
+    }
+
+    fn add_action(&mut self, key: &str, title: &str, description: &str, risk: Risk, id: Option<NodeId>, action: &str) {
+        let size = id.map(|i| self.size(&[i])).unwrap_or(0);
+        if size > 0 {
+            self.out.push(Suggestion {
+                key: key.into(),
+                title: title.into(),
+                description: description.into(),
+                risk,
+                size,
+                ids: Vec::new(),
+                manual_hint: None,
+                action: Some(action.into()),
+            });
+        }
+    }
+
+    /// Hijos directos de las carpetas dadas (perfiles de navegador, perfiles de Firefox…).
+    fn subdirs(&self, parents: &[NodeId]) -> Vec<NodeId> {
+        self.children_where(parents, |_, d| d)
     }
 
     fn find(&self, rel: &str) -> Option<NodeId> {
@@ -73,13 +98,11 @@ impl Builder<'_> {
     /// Busca `rel` dentro de cada perfil de usuario (Users\<nombre>\...).
     fn in_profiles(&self, rel: &str) -> Vec<NodeId> {
         let Some(users) = self.find("Users") else { return Vec::new() };
-        let profiles = self.tree.entry(users).map(|e| e.children.clone()).unwrap_or_default();
-        profiles
-            .into_iter()
-            .filter_map(|p| {
-                let name = &self.tree.entry(p)?.name;
-                self.find(&format!("Users/{name}/{rel}"))
-            })
+        self.tree
+            .kids(users)
+            .iter()
+            .filter(|p| self.tree.is_dir(**p))
+            .filter_map(|p| self.find(&format!("Users/{}/{rel}", self.tree.name(*p))))
             .collect()
     }
 
@@ -87,9 +110,8 @@ impl Builder<'_> {
     fn children_where(&self, parents: &[NodeId], pred: impl Fn(&str, bool) -> bool) -> Vec<NodeId> {
         parents
             .iter()
-            .filter_map(|p| self.tree.entry(*p))
-            .flat_map(|e| e.children.iter().copied())
-            .filter(|c| self.tree.entry(*c).map(|e| pred(&e.name, e.is_dir)).unwrap_or(false))
+            .flat_map(|p| self.tree.kids(*p).iter().copied())
+            .filter(|c| pred(self.tree.name(*c), self.tree.is_dir(*c)))
             .collect()
     }
 }
@@ -99,16 +121,15 @@ fn node_modules(tree: &Tree) -> Vec<NodeId> {
     let mut found = Vec::new();
     let mut stack = vec![Tree::ROOT];
     while let Some(id) = stack.pop() {
-        let Some(e) = tree.entry(id) else { continue };
-        for c in &e.children {
-            let ce = tree.entry(*c).unwrap();
-            if !ce.is_dir {
+        for &c in tree.kids(id) {
+            if !tree.is_dir(c) {
                 continue;
             }
-            if &*ce.name == "node_modules" {
-                found.push(*c);
-            } else if !matches!(&*ce.name, "Windows" | "$Recycle.Bin" | "System Volume Information") {
-                stack.push(*c);
+            let name = tree.name(c);
+            if name == "node_modules" {
+                found.push(c);
+            } else if !matches!(name, "Windows" | "$Recycle.Bin" | "System Volume Information") {
+                stack.push(c);
             }
         }
     }
@@ -140,12 +161,46 @@ pub fn suggestions(tree: &Tree) -> Vec<Suggestion> {
         let profile_dirs = b.children_where(&profiles, |_, d| d);
         browser.extend(b.children_where(&profile_dirs, |n, d| d && matches!(n, "Cache" | "Code Cache" | "GPUCache" | "Service Worker")));
     }
-    b.add("browser-cache", "Caché de navegadores", "Copias de páginas web de Chrome, Edge y Brave. Se vuelven a descargar cuando hagan falta.", Risk::Safe, browser);
+    // Firefox: Profiles\<perfil>\cache2 en Local.
+    let ff = b.in_profiles("AppData/Local/Mozilla/Firefox/Profiles");
+    let ff_profiles = b.subdirs(&ff);
+    browser.extend(b.children_where(&ff_profiles, |n, d| d && n.eq_ignore_ascii_case("cache2")));
+    b.add("browser-cache", "Caché de navegadores", "Copias de páginas web de Chrome, Edge, Brave y Firefox. Se vuelven a descargar cuando hagan falta.", Risk::Safe, browser);
+
+    let mut apps = Vec::new();
+    for base in ["AppData/Roaming/discord", "AppData/Roaming/Microsoft/Teams", "AppData/Roaming/Slack", "AppData/Roaming/Code"] {
+        let dirs = b.in_profiles(base);
+        apps.extend(b.children_where(&dirs, |n, d| d && matches!(n, "Cache" | "Code Cache" | "GPUCache" | "CachedData" | "Service Worker")));
+    }
+    apps.extend(b.in_profiles("AppData/Local/Packages/MSTeams_8wekyb3d8bbwe/LocalCache"));
+    apps.extend(b.in_profiles("AppData/Local/Spotify/Data"));
+    b.add("app-cache", "Caché de Discord, Teams, Slack, Spotify y VS Code", "Archivos temporales de estas apps. Se regeneran solos; puede que tarden un poco más en abrir la primera vez.", Risk::Safe, apps);
+
+    let mut dumps = b.in_profiles("AppData/Local/CrashDumps");
+    dumps.extend(b.find("Windows/Minidump"));
+    dumps.extend(b.find("Windows/LiveKernelReports"));
+    dumps.extend(b.find("Windows/MEMORY.DMP"));
+    dumps.extend(b.find("ProgramData/Microsoft/Windows/WER/ReportArchive"));
+    dumps.extend(b.find("ProgramData/Microsoft/Windows/WER/ReportQueue"));
+    b.add("crash-dumps", "Volcados de errores", "Informes que Windows guarda cuando un programa o el sistema se bloquea. Solo sirven para diagnosticar fallos.", Risk::Safe, dumps);
+
+    let delivery: Vec<_> = b
+        .find("Windows/ServiceProfiles/NetworkService/AppData/Local/Microsoft/Windows/DeliveryOptimization/Cache")
+        .or_else(|| b.find("Windows/SoftwareDistribution/DeliveryOptimization"))
+        .into_iter()
+        .collect();
+    b.add("delivery-optimization", "Optimización de distribución", "Copias de actualizaciones que Windows comparte con otros equipos. Se pueden borrar sin problema.", Risk::Safe, delivery);
 
     let mut dev = b.in_profiles("AppData/Local/npm-cache");
     dev.extend(b.in_profiles("AppData/Local/pip/cache"));
     dev.extend(b.in_profiles("AppData/Local/Yarn/Cache"));
     b.add("dev-cache", "Caché de npm, pip y Yarn", "Paquetes descargados que se pueden volver a bajar.", Risk::Safe, dev);
+
+    let mut pkgs = b.in_profiles(".nuget/packages");
+    pkgs.extend(b.in_profiles(".gradle/caches"));
+    pkgs.extend(b.in_profiles(".cargo/registry"));
+    pkgs.extend(b.in_profiles(".m2/repository"));
+    b.add("package-cache", "Paquetes de NuGet, Gradle, Cargo y Maven", "Dependencias descargadas de proyectos de programación. Se vuelven a bajar al compilar, lo que puede tardar.", Risk::Review, pkgs);
 
     let mut shaders = b.in_profiles("AppData/Local/NVIDIA/DXCache");
     shaders.extend(b.in_profiles("AppData/Local/NVIDIA/GLCache"));
@@ -172,13 +227,13 @@ pub fn suggestions(tree: &Tree) -> Vec<Suggestion> {
     );
 
     let bin = b.find("$Recycle.Bin");
-    b.add_manual(
+    b.add_action(
         "recycle-bin",
-        "Papelera de reciclaje",
-        "Archivos que ya borraste y siguen ocupando espacio.",
-        Risk::Safe,
+        "Vaciar la papelera de reciclaje",
+        "Archivos que ya borraste y siguen ocupando espacio. Al vaciarla ya no se pueden recuperar.",
+        Risk::Review,
         bin,
-        "Haz clic derecho en la Papelera del escritorio y elige Vaciar papelera de reciclaje.",
+        "empty-recycle-bin",
     );
 
     b.out.sort_by(|a, b| (a.risk as u8).cmp(&(b.risk as u8)).then(b.size.cmp(&a.size)));

@@ -2,7 +2,7 @@
 // Imita el comportamiento de crates/scanner: ids, hijos ordenados por tamaño y totales por carpeta.
 
 import type { Api } from "./api";
-import type { Category, Drive, NodeInfo, ScanDone, ScanProgress, Suggestion } from "./types";
+import type { Category, Change, DupGroup, DupProgress, Drive, NodeInfo, ScanDone, ScanProgress, SubNode, Suggestion } from "./types";
 
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
@@ -172,7 +172,7 @@ class DemoTree {
     const k = (v: number) => (e.isDir ? Math.round(v * this.scale) : v);
     return {
       id, parent: e.parent >= 0 ? e.parent : null, name: e.name, path: this.path(id), isDir: e.isDir, size: k(e.size), logical: k(e.logical), cloud: k(e.cloud), cloudFiles: k(e.cloudFiles),
-      cloudOnly: !e.isDir && e.cloudFiles === 1, files: k(e.files), dirs: k(e.dirs),
+      cloudOnly: !e.isDir && e.cloudFiles === 1, hardlink: false, files: k(e.files), dirs: k(e.dirs),
       modified: e.modified, ext: e.isDir ? "" : extOf(e.name), category: e.category,
       hasChildren: e.children.some((c) => this.entries[c].isDir),
     };
@@ -214,6 +214,7 @@ export function demoApi(): Api {
   const trees: Record<string, DemoTree> = { "C:\\": new DemoTree(cDrive()) };
   const progressCbs: ((p: ScanProgress) => void)[] = [];
   const doneCbs: ((d: ScanDone) => void)[] = [];
+  const dupCbs: ((p: DupProgress) => void)[] = [];
   let cancelled = false;
   const tree = (root: string) => {
     const t = trees[root];
@@ -235,7 +236,7 @@ export function demoApi(): Api {
         const used = trees[root]?.entries[0].size ?? (root === "C:\\" ? 0 : 1430 * GB);
         return {
           root, name: root === "C:\\" ? "Windows" : "Datos", total: caps[root], available: caps[root] - used,
-          kind: root === "C:\\" ? "SSD" : "HDD", removable: false, fileSystem: "NTFS", scanned: !!trees[root],
+          kind: root === "C:\\" ? "SSD" : "HDD", removable: false, fileSystem: "NTFS", scanned: !!trees[root], scannedAt: trees[root] ? Math.floor(Date.now() / 1000) - 3600 : null,
         };
       });
     },
@@ -354,6 +355,100 @@ export function demoApi(): Api {
     async moveToTrash(root, ids) {
       const t = tree(root);
       return ids.reduce((a, i) => a + t.remove(i), 0);
+    },
+    async onLoaded() { return () => {}; },
+    async onChanges() { return () => {}; },
+    async getChanges(root) {
+      if (!trees[root]) return null;
+      const now = Math.floor(Date.now() / 1000);
+      const f = (name: string, old: number, nw: number, children: Change[] = [], isDir = true): Change =>
+        ({ name, isDir, old, new: nw, existed: old > 0, exists: nw > 0, children });
+      const used = trees[root].entries[0].size;
+      return {
+        root, from: now - 9 * 86400, to: now,
+        tree: f(root, used - 31.4 * GB, used, [
+          f("Users", 212 * GB, 236.5 * GB, [
+            f("Eliecer", 205 * GB, 229.5 * GB, [
+              f("Videos", 61 * GB, 79.2 * GB, [f("grabacion-pantalla-2026-11.mp4", 0, 14.6 * GB, [], false), f("Capturas", 2.1 * GB, 5.7 * GB)]),
+              f("Downloads", 18 * GB, 24.9 * GB, [f("win11-24h2.iso", 0, 5.8 * GB, [], false), f("instalador-juego.exe", 1.2 * GB, 0, [], false)]),
+              f("Projects", 30 * GB, 29.1 * GB),
+            ]),
+          ]),
+          f("Windows", 31 * GB, 34.2 * GB, [f("SoftwareDistribution", 1.1 * GB, 4.3 * GB)]),
+          f("Windows.old", 9.3 * GB, 0),
+        ]),
+      };
+    },
+    async getSubtree(root, id, depth) {
+      const t = tree(root);
+      const min = t.entries[id].size / 1000;
+      const sub = (i: number, d: number): SubNode => {
+        const info = t.info(i);
+        const e = t.entries[i];
+        return {
+          id: i, name: i === 0 ? root : info.name, size: info.size, category: info.category, isDir: info.isDir,
+          children: d > 0 && e.isDir ? e.children.slice(0, 60).filter((c) => t.info(c).size > min).map((c) => sub(c, d - 1)) : [],
+        };
+      };
+      return sub(id, depth);
+    },
+    async findFiles(root, id, f, limit) {
+      const t = tree(root);
+      const cutoff = f.olderThanDays ? Date.now() / 1000 - f.olderThanDays * 86400 : Infinity;
+      const ext = f.ext?.replace(/^\./, "").toLowerCase() || null;
+      const out: number[] = [];
+      const stack = [id];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        const e = t.entries[cur];
+        if (e.isDir) { stack.push(...e.children); continue; }
+        if (e.size < (f.minSize ?? 0) || e.modified > cutoff || (f.category && e.category !== f.category) || (ext && extOf(e.name) !== ext)) continue;
+        out.push(cur);
+      }
+      return out.sort((a, b) => t.entries[b].size - t.entries[a].size).slice(0, limit).map((i) => t.info(i));
+    },
+    async findDuplicates(root, id, minSize) {
+      const t = tree(root);
+      // En los datos de ejemplo, los archivos con el mismo tamaño y extensión se consideran copias.
+      const bySize = new Map<string, number[]>();
+      const stack = [id];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        const e = t.entries[cur];
+        if (e.isDir) { stack.push(...e.children); continue; }
+        if (e.size < Math.max(minSize, 1) || e.gone) continue;
+        const k = `${Math.round(e.size / MB)}-${extOf(e.name)}`;
+        bySize.set(k, [...(bySize.get(k) ?? []), cur]);
+      }
+      for (let i = 0; i <= 10; i++) { dupCbs.forEach((cb) => cb({ candidates: 120, checked: i * 12, bytes: i * 400 * MB })); await sleep(120); }
+      const groups: DupGroup[] = [...bySize.values()].filter((v) => v.length > 1).map((v) => {
+        const files = v.map((i) => t.info(i));
+        return { size: files[0].size, wasted: files[0].size * (files.length - 1), files };
+      });
+      return groups.sort((a, b) => b.wasted - a.wasted);
+    },
+    async cancelDuplicates() {},
+    async onDupProgress(cb) {
+      dupCbs.push(cb);
+      return () => dupCbs.splice(dupCbs.indexOf(cb), 1);
+    },
+    async exportReport() { throw new Error("En la app de escritorio, aquí se guarda el informe en tu PC."); },
+    async deletePermanently(root, ids) {
+      const t = tree(root);
+      return ids.reduce((a, i) => a + t.remove(i), 0);
+    },
+    async emptyRecycleBin() {},
+    async startupPath() { return null; },
+    async pickFolder() { return null; },
+    async pickSavePath() { return null; },
+    async isAdmin() { return false; },
+    async checkUpdate() { return null; },
+    async installUpdate() {},
+    async restartAsAdmin() { throw new Error("En la app de escritorio, aquí se vuelve a abrir como administrador."); },
+    async locate(root, path) {
+      const t = tree(root);
+      const rel = path.startsWith(root) ? path.slice(root.length) : path;
+      return t.find(rel.replace(/\\/g, "/")) ?? null;
     },
   };
 }

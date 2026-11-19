@@ -11,6 +11,10 @@ export interface Drive {
   removable: boolean;
   fileSystem: string;
   scanned: boolean;
+  /** Fecha (segundos Unix) del análisis abierto, que puede venir de un análisis guardado. */
+  scannedAt?: number | null;
+  /** Es una carpeta analizada, no una unidad entera. */
+  folder?: boolean;
 }
 
 export interface NodeInfo {
@@ -28,6 +32,8 @@ export interface NodeInfo {
   cloudFiles: number;
   /** Archivo no descargado: está solo en la nube. */
   cloudOnly: boolean;
+  /** Otro nombre (enlace duro) de un archivo cuyo espacio ya se contó en otra carpeta. */
+  hardlink: boolean;
   files: number;
   dirs: number;
   modified: number;
@@ -60,6 +66,8 @@ export interface ScanProgress {
 export interface ScanDone extends ScanProgress {
   errors: number;
   cancelled: boolean;
+  /** Se leyó la tabla MFT directamente (análisis rápido como administrador). */
+  fast?: boolean;
 }
 
 export type Risk = "safe" | "review" | "careful";
@@ -72,4 +80,53 @@ export interface Suggestion {
   size: number;
   ids: number[];
   manualHint: string | null;
+  /** Acción especial en lugar de la papelera, por ejemplo "empty-recycle-bin". */
+  action?: string | null;
+}
+
+export interface FileFilter {
+  minSize?: number;
+  olderThanDays?: number;
+  category?: Category | null;
+  ext?: string | null;
+}
+
+export interface DupGroup {
+  size: number;
+  wasted: number;
+  files: NodeInfo[];
+}
+
+export interface DupProgress {
+  candidates: number;
+  checked: number;
+  bytes: number;
+}
+
+/** Un elemento que cambió entre dos análisis. */
+export interface Change {
+  name: string;
+  isDir: boolean;
+  old: number;
+  new: number;
+  existed: boolean;
+  exists: boolean;
+  children: Change[];
+}
+
+export interface Changes {
+  root: string;
+  from: number;
+  to: number;
+  tree: Change;
+}
+
+/** Una carpeta con varios niveles de hijos, para el mapa anidado y los anillos. */
+export interface SubNode {
+  id: number;
+  name: string;
+  size: number;
+  category: Category;
+  isDir: boolean;
+  children: SubNode[];
 }

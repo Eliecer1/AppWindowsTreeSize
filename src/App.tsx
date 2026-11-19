@@ -1,14 +1,19 @@
+import { lang, setLang, tr } from "./i18n";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { apiPromise, type Api } from "./api";
 import { Toast } from "./components";
 import { CommandPalette } from "./views/CommandPalette";
+import { Changes } from "./views/Changes";
 import { Clean } from "./views/Clean";
+import { Duplicates } from "./views/Duplicates";
+import { Files } from "./views/Files";
 import { Explore } from "./views/Explore";
 import { Home } from "./views/Home";
 import { Types } from "./views/Types";
 import type { Drive, NodeInfo, ScanDone, ScanProgress } from "./types";
 
-export type View = "home" | "explore" | "clean" | "types";
+export type View = "home" | "explore" | "files" | "duplicates" | "clean" | "types" | "changes";
+const VIEWS: View[] = ["home", "explore", "files", "duplicates", "clean", "types", "changes"];
 
 /** Lo que comparten todas las vistas. */
 export interface Ctx {
@@ -23,24 +28,32 @@ export interface Ctx {
   /** Sube cada poco mientras hay un análisis en curso, para que las vistas muestren los tamaños en vivo. */
   live: number;
   startScan: (root: string) => void;
+  /** Pide una carpeta con el diálogo de Windows y la analiza. */
+  scanFolder: () => void;
   explore: (root: string, id?: number, select?: NodeInfo) => void;
   go: (v: View) => void;
   toast: (text: string, error?: boolean) => void;
   activeRoot: string | undefined;
   setActiveRoot: (root: string) => void;
+  /** La app corre como administrador: el análisis de discos enteros lee la MFT directamente. */
+  isAdmin: boolean;
+  restartAsAdmin: () => void;
 }
 
-const NAV: { view: View; label: string; icon: ReactNode }[] = [
-  { view: "home", label: "Inicio", icon: <path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z" /> },
-  { view: "explore", label: "Explorar", icon: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18M12 12h9" /></> },
-  { view: "clean", label: "Limpiar", icon: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /> },
-  { view: "types", label: "Tipos de archivo", icon: <><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7 5" /></> },
+const NAV: { view: View; label: () => string; icon: ReactNode }[] = [
+  { view: "home", label: () => tr("Inicio", "Home"), icon: <path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z" /> },
+  { view: "explore", label: () => tr("Explorar", "Explore"), icon: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M12 3v18M12 12h9" /></> },
+  { view: "files", label: () => tr("Archivos", "Files"), icon: <><path d="M6 2.5h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-17a1 1 0 0 1 1-1z" /><path d="M9 13h6M9 17h4" /></> },
+  { view: "duplicates", label: () => tr("Duplicados", "Duplicates"), icon: <><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" /></> },
+  { view: "clean", label: () => tr("Limpiar", "Clean up"), icon: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /> },
+  { view: "types", label: () => tr("Tipos de archivo", "File types"), icon: <><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7 5" /></> },
+  { view: "changes", label: () => tr("Cambios", "Changes"), icon: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" /> },
 ];
 
 function readView(): View {
   try {
     const v = localStorage.getItem("awts-view");
-    if (v === "home" || v === "explore" || v === "clean" || v === "types") return v;
+    if (VIEWS.includes(v as View)) return v as View;
   } catch { /* almacenamiento no disponible */ }
   return "home";
 }
@@ -57,6 +70,10 @@ export default function App() {
   const [activeRoot, setActiveRoot] = useState<string | undefined>();
   const [msg, setMsg] = useState<{ text: string; error?: boolean; at: number } | null>(null);
   const [palette, setPalette] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  // Cambiar de idioma vuelve a dibujar toda la interfaz.
+  const [langState, setLangState] = useState(lang());
+  const [update, setUpdate] = useState<{ version: string; installing?: boolean } | null>(null);
 
   const toast = useCallback((text: string, error = false) => setMsg({ text, error, at: Date.now() }), []);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
@@ -68,8 +85,26 @@ export default function App() {
     try { setDrives(await api.listDrives()); } catch (e) { toast(String(e), true); }
   }, [api, toast]);
 
+  // Abierta desde "Analizar con AppWindowsTreeSize" en el Explorador: analiza esa carpeta y la muestra.
   useEffect(() => {
     if (!api) return;
+    api.startupPath().then(async (p) => {
+      if (!p) return;
+      setScanning({ root: p, files: 0, dirs: 0, bytes: 0, elapsedMs: 0 });
+      try {
+        await api.startScan(p);
+        setActiveRoot(p);
+        setTarget({ root: p, id: 0, at: Date.now() });
+        setView("explore");
+      } catch (e) { setScanning(null); toast(String(e), true); }
+    }).catch(() => {});
+  }, [api, toast]);
+
+  useEffect(() => {
+    if (!api) return;
+    api.isAdmin().then(setIsAdmin).catch(() => {});
+    // Busca una versión nueva unos segundos después de abrir, sin molestar si no hay conexión.
+    const upd = setTimeout(() => { api.checkUpdate().then((u) => u && setUpdate({ version: u.version })).catch(() => {}); }, 4000);
     refreshDrives();
     const subs = [
       api.onProgress((p) => setScanning(p)),
@@ -80,8 +115,11 @@ export default function App() {
         refreshDrives();
         bump();
       }),
+      // Un análisis guardado se abrió, o hay una comparación nueva: las vistas se actualizan.
+      api.onLoaded(() => { refreshDrives(); bump(); }),
+      api.onChanges(() => bump()),
     ];
-    return () => { subs.forEach((s) => s.then((off) => off())); };
+    return () => { clearTimeout(upd); subs.forEach((s) => s.then((off) => off())); };
   }, [api, refreshDrives, bump]);
 
   // Mientras se analiza, el árbol ya se puede consultar y va creciendo: las vistas se refrescan solas.
@@ -114,6 +152,8 @@ export default function App() {
     api, drives, primary, scanning, lastScan, version, bump, live, toast, go,
     activeRoot: root,
     setActiveRoot,
+    isAdmin,
+    restartAsAdmin: () => { api.restartAsAdmin().catch((e) => toast(String(e), true)); },
     startScan: async (r) => {
       try {
         setScanning({ root: r, files: 0, dirs: 0, bytes: 0, elapsedMs: 0 });
@@ -121,6 +161,13 @@ export default function App() {
         setActiveRoot(r);
         refreshDrives();
       } catch (e) { setScanning(null); toast(String(e), true); }
+    },
+    scanFolder: async () => {
+      try {
+        const dir = await api.pickFolder();
+        if (dir) ctx.startScan(dir);
+        else if (api.isDemo) toast(tr("En la app de escritorio se abre el diálogo para elegir una carpeta.", "In the desktop app this opens the folder picker."));
+      } catch (e) { toast(String(e), true); }
     },
     explore: (r, id = 0, select) => {
       setActiveRoot(r);
@@ -136,30 +183,41 @@ export default function App() {
   };
 
   return (
-    <div className="window">
+    <div className="window" key={langState}>
       <header className="titlebar">
         <img className="logo" src="/icon.png" alt="" />
         <h1>AppWindowsTreeSize</h1>
-        {api.isDemo && <span className="demo-badge" title="Abierto en el navegador: se muestran datos de ejemplo">Datos de ejemplo</span>}
+        {api.isDemo && <span className="demo-badge" title={tr("Abierto en el navegador: se muestran datos de ejemplo", "Opened in a browser: showing sample data")}>{tr("Datos de ejemplo", "Sample data")}</span>}
         <div className="sp" />
-        <button className="search" onClick={() => setPalette(true)} aria-label="Buscar archivos y carpetas">
+        {update && (
+          <button className="btn small update-btn" disabled={update.installing} title={tr("Descarga la versión nueva, la instala y reinicia la app", "Downloads the new version, installs it and restarts the app")}
+            onClick={() => {
+              setUpdate({ ...update, installing: true });
+              api.installUpdate().catch((e) => { setUpdate({ version: update.version }); toast(String(e), true); });
+            }}>
+            {update.installing ? tr("Actualizando…", "Updating…") : tr(`Actualizar a la versión ${update.version}`, `Update to version ${update.version}`)}
+          </button>
+        )}
+        <button className="search" onClick={() => setPalette(true)} aria-label={tr("Buscar archivos y carpetas", "Search files and folders")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-          <span>Buscar archivos y carpetas…</span><kbd>Ctrl K</kbd>
+          <span>{tr("Buscar archivos y carpetas…", "Search files and folders…")}</span><kbd>Ctrl K</kbd>
         </button>
-        <button className="iconbtn" onClick={toggleTheme} aria-label="Cambiar tema" title="Cambiar tema">
+        <button className="iconbtn lang" onClick={() => { setLang(lang() === "es" ? "en" : "es"); setLangState(lang()); }}
+          aria-label={tr("Cambiar a inglés", "Switch to Spanish")} title={tr("Cambiar a inglés", "Switch to Spanish")}>{lang() === "es" ? "EN" : "ES"}</button>
+        <button className="iconbtn" onClick={toggleTheme} aria-label={tr("Cambiar tema", "Change theme")} title={tr("Cambiar tema", "Change theme")}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z" /></svg>
         </button>
       </header>
       <div className="body">
-        <nav className="side" aria-label="Secciones">
+        <nav className="side" aria-label={tr("Secciones", "Sections")}>
           {NAV.map((n) => (
             <button key={n.view} aria-current={view === n.view ? "page" : undefined} onClick={() => go(n.view)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{n.icon}</svg>
-              {n.label}
+              {n.label()}
             </button>
           ))}
           <div className="foot">
-            {scanning ? <>Analizando {scanning.root}…</> : api.isDemo ? <>Vista previa con datos de ejemplo.</> : <>Listo.</>}
+            {scanning ? <>{tr("Analizando", "Scanning")} {scanning.root}…</> : api.isDemo ? <>{tr("Vista previa con datos de ejemplo.", "Preview with sample data.")}</> : <>{tr("Listo.", "Ready.")}</>}
           </div>
         </nav>
         <main>
@@ -167,6 +225,9 @@ export default function App() {
           {view === "explore" && <Explore ctx={ctx} target={target} />}
           {view === "clean" && <Clean ctx={ctx} />}
           {view === "types" && <Types ctx={ctx} />}
+          {view === "changes" && <Changes ctx={ctx} />}
+          {view === "files" && <Files ctx={ctx} />}
+          {view === "duplicates" && <Duplicates ctx={ctx} />}
         </main>
       </div>
       {palette && root && <CommandPalette ctx={ctx} root={root} onClose={() => setPalette(false)} />}
