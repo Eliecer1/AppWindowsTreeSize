@@ -84,11 +84,15 @@ export interface Suggestion {
   action?: string | null;
 }
 
+/** Qué archivos se miran: todos, solo los guardados en este PC o solo los que están en la nube. */
+export type Storage = "all" | "local" | "cloud";
+
 export interface FileFilter {
   minSize?: number;
   olderThanDays?: number;
   category?: Category | null;
   ext?: string | null;
+  storage?: Storage;
 }
 
 export interface DupGroup {

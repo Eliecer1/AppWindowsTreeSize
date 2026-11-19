@@ -10,7 +10,7 @@ import { Files } from "./views/Files";
 import { Explore } from "./views/Explore";
 import { Home } from "./views/Home";
 import { Types } from "./views/Types";
-import type { Drive, NodeInfo, ScanDone, ScanProgress } from "./types";
+import type { Drive, NodeInfo, ScanDone, ScanProgress, Storage } from "./types";
 
 export type View = "home" | "explore" | "files" | "duplicates" | "clean" | "types" | "changes";
 const VIEWS: View[] = ["home", "explore", "files", "duplicates", "clean", "types", "changes"];
@@ -38,6 +38,9 @@ export interface Ctx {
   /** La app corre como administrador: el análisis de discos enteros lee la MFT directamente. */
   isAdmin: boolean;
   restartAsAdmin: () => void;
+  /** Filtro de Explorar y Archivos: todo, solo lo guardado en este PC o solo lo que está en la nube. */
+  storage: Storage;
+  setStorage: (s: Storage) => void;
 }
 
 const NAV: { view: View; label: () => string; icon: ReactNode }[] = [
@@ -49,6 +52,14 @@ const NAV: { view: View; label: () => string; icon: ReactNode }[] = [
   { view: "types", label: () => tr("Tipos de archivo", "File types"), icon: <><circle cx="12" cy="12" r="9" /><path d="M12 3v9l7 5" /></> },
   { view: "changes", label: () => tr("Cambios", "Changes"), icon: <path d="M3 17l6-6 4 4 8-8M15 7h6v6" /> },
 ];
+
+function readStorage(): Storage {
+  try {
+    const s = localStorage.getItem("awts-storage");
+    if (s === "local" || s === "cloud") return s;
+  } catch { /* almacenamiento no disponible */ }
+  return "all";
+}
 
 function readView(): View {
   try {
@@ -71,6 +82,7 @@ export default function App() {
   const [msg, setMsg] = useState<{ text: string; error?: boolean; at: number } | null>(null);
   const [palette, setPalette] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [storage, setStorageState] = useState<Storage>(readStorage);
   // Cambiar de idioma vuelve a dibujar toda la interfaz.
   const [langState, setLangState] = useState(lang());
   const [update, setUpdate] = useState<{ version: string; installing?: boolean } | null>(null);
@@ -130,6 +142,11 @@ export default function App() {
     return () => clearInterval(t);
   }, [isScanning]);
 
+  const setStorage = useCallback((s: Storage) => {
+    setStorageState(s);
+    try { localStorage.setItem("awts-storage", s); } catch { /* sin almacenamiento */ }
+  }, []);
+
   const go = useCallback((v: View) => {
     setView(v);
     try { localStorage.setItem("awts-view", v); } catch { /* sin almacenamiento */ }
@@ -153,6 +170,8 @@ export default function App() {
     activeRoot: root,
     setActiveRoot,
     isAdmin,
+    storage,
+    setStorage,
     restartAsAdmin: () => { api.restartAsAdmin().catch((e) => toast(String(e), true)); },
     startScan: async (r) => {
       try {

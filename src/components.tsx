@@ -1,7 +1,7 @@
 import { tr } from "./i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CATEGORY, int, pct, size } from "./format";
-import type { CategorySize, NodeInfo, SubNode } from "./types";
+import type { CategorySize, NodeInfo, Storage, SubNode } from "./types";
 
 export function Ring({ used, total, size: px = 150 }: { used: number; total: number; size?: number }) {
   const r = px / 2 - 10;
@@ -95,6 +95,24 @@ export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly" | "hardl
       </svg>
       {tr("En el disco", "On disk")}
     </span>
+  );
+}
+
+/** Elige qué se ve: todo, solo lo guardado en este PC o solo lo que está en la nube. */
+export function StorageToggle({ value, onChange }: { value: Storage; onChange: (s: Storage) => void }) {
+  const opts: { v: Storage; label: string; title: string }[] = [
+    { v: "all", label: tr("Todo", "All"), title: tr("Todos los archivos", "All files") },
+    { v: "local", label: tr("En el disco", "On disk"), title: tr("Solo lo que está guardado en este PC y ocupa espacio", "Only what is stored on this PC and takes space") },
+    { v: "cloud", label: tr("En la nube", "In the cloud"), title: tr("Solo lo que está en OneDrive u otra nube sin descargar. Los tamaños son lo que ocuparía si lo descargaras.", "Only what is in OneDrive or another cloud and not downloaded. Sizes are what it would take if you downloaded it.") },
+  ];
+  return (
+    <div className="viewtoggle storage-toggle" role="group" aria-label={tr("Qué archivos ver", "Which files to show")}>
+      {opts.map((o) => (
+        <button key={o.v} aria-pressed={value === o.v} title={o.title} onClick={() => onChange(o.v)}>
+          {o.v === "cloud" && <CloudIcon px={12} />}{o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

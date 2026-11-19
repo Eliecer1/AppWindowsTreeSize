@@ -1,7 +1,7 @@
 import { tr } from "../i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Ctx } from "../App";
-import { CloudIcon, CloudNote, FileStatus, NodeIcon, RefreshIcon, StackBar, Sunburst, Treemap } from "../components";
+import { CloudIcon, CloudNote, FileStatus, NodeIcon, RefreshIcon, StackBar, StorageToggle, Sunburst, Treemap } from "../components";
 import { CATEGORY, date, driveLetter, fmtPct, int, pct, size } from "../format";
 import type { FolderView, NodeInfo, SubNode } from "../types";
 
@@ -13,7 +13,7 @@ function readMode(): Mode {
 }
 
 export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id: number; select?: NodeInfo; at: number } | null }) {
-  const { api, version, drives } = ctx;
+  const { api, version, drives, storage } = ctx;
   const scanned = drives.filter((d) => d.scanned);
   const root = ctx.activeRoot && scanned.some((d) => d.root === ctx.activeRoot) ? ctx.activeRoot : scanned[0]?.root;
   const [folderId, setFolderId] = useState(0);
@@ -54,12 +54,15 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   useEffect(() => {
     if (!root) return;
     let live = true;
-    api.getFolder(root, folderId, PAGE)
+    api.getFolder(root, folderId, PAGE, storage)
       .then((f) => { if (live) { setFolder(f); setChildren(f.children); } })
       .catch(() => { if (live && folderId !== 0) setFolderId(0); });
-    api.getSubtree(root, folderId, mode === "rings" ? 3 : 2).then((s) => { if (live) setSub(s); }).catch(() => {});
+    api.getSubtree(root, folderId, mode === "rings" ? 3 : 2, storage).then((s) => { if (live) setSub(s); }).catch(() => {});
     return () => { live = false; };
-  }, [api, root, folderId, version, ctx.live, mode]);
+  }, [api, root, folderId, version, ctx.live, mode, storage]);
+
+  // Al cambiar el filtro, lo seleccionado puede dejar de verse.
+  useEffect(() => { setSel(null); setMulti(new Set()); setConfirm(null); }, [storage]);
 
   const n = folder?.node;
   const picked = children.filter((c) => multi.has(c.id));
@@ -245,6 +248,12 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   const tsize = tlist.reduce((a, c) => a + c.size, 0);
   const tname = tlist.length === 1 ? tlist[0].name : tr(`${tlist.length} elementos`, `${tlist.length} items`);
   const nested = new Map((sub?.children ?? []).map((c) => [c.id, c]));
+  // Con el filtro de la nube, los tamaños son lo que está en la nube sin descargar, no espacio en disco.
+  const where = storage === "cloud" ? tr("en la nube", "in the cloud") : tr("en disco", "on disk");
+  const empty = storage === "cloud"
+    ? tr("Nada de esta carpeta está solo en la nube.", "Nothing in this folder is cloud-only.")
+    : storage === "local" ? tr("Nada de esta carpeta ocupa espacio en este PC: está todo en la nube.", "Nothing in this folder takes space on this PC: it is all in the cloud.")
+    : tr("Esta carpeta está vacía.", "This folder is empty.");
 
   return (
     <div className="view">
@@ -269,6 +278,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             </span>
           ))}
         </nav>
+        <StorageToggle value={storage} onChange={ctx.setStorage} />
         <div className="viewtoggle" role="group" aria-label={tr("Vista", "View")}>
           <button aria-pressed={mode === "blocks"} onClick={() => setMode("blocks")}>{tr("Bloques", "Blocks")}</button>
           <button aria-pressed={mode === "rings"} onClick={() => setMode("rings")}>{tr("Anillos", "Rings")}</button>
@@ -289,7 +299,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
 
       <div className="explore">
         <div className={`card list ${hasFiles ? "with-status" : ""}`} role="list">
-          {children.length === 0 && <p className="muted" style={{ padding: 10 }}>{tr("Esta carpeta está vacía.", "This folder is empty.")}</p>}
+          {children.length === 0 && <p className="muted" style={{ padding: 10 }}>{empty}</p>}
           {hasFiles && (
             <div className="row head-row" aria-hidden="true">
               <span style={{ width: 16 }} /><span>{tr("Nombre", "Name")}</span><span>{tr("Estado", "Status")}</span><span>{tr("Tamaño", "Size")}</span>
@@ -301,7 +311,9 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
               <NodeIcon node={c} px={16} />
               <span className="nm">{c.name}{!c.isDir && c.ext && <small>.{c.ext}</small>}</span>
               {hasFiles && <span className="st">{!c.isDir && <FileStatus node={c} />}</span>}
-              {c.cloudOnly
+              {storage === "cloud"
+                ? <span className="sz cloud" title={tr(`${size(c.size)} solo en la nube`, `${size(c.size)} only in the cloud`)}>{size(c.size)}</span>
+                : c.cloudOnly
                 ? <span className="sz cloud" title={tr(`Pesa ${size(c.logical)}, pero está solo en la nube`, `${size(c.logical)}, but only in the cloud`)}>{size(c.logical)}</span>
                 : <span className="sz">{size(c.size)}{c.cloud > 0 && <span className="cloud" style={{ marginLeft: 5 }} title={tr(`${size(c.cloud)} más están solo en la nube`, `${size(c.cloud)} more are only in the cloud`)}><CloudIcon px={12} /></span>}</span>}
               <span className="bar"><i style={{ width: `${(c.size / biggest) * 100}%`, background: CATEGORY[c.category].color }} /></span>
@@ -309,7 +321,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
           ))}
           {children.length < folder.totalChildren && (
             <div className="more"><button className="btn" onClick={async () => {
-              const more = await api.getChildren(root, n.id, children.length, PAGE);
+              const more = await api.getChildren(root, n.id, children.length, PAGE, storage);
               setChildren((c) => [...c, ...more]);
             }}>{tr("Mostrar más", "Show more")} ({int(folder.totalChildren - children.length)} {tr("restantes", "left")})</button></div>
           )}
@@ -324,17 +336,17 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
               {many ? (
                 <>
                   <h3>{picked.length} elementos seleccionados</h3>
-                  <p><span className="num">{size(pickedSize)}</span> {tr("en disco", "on disk")} · {fmtPct(pct(pickedSize, folder.ancestors[0].size))} {tr("del espacio analizado", "of the scanned space")}</p>
+                  <p><span className="num">{size(pickedSize)}</span> {where} · {fmtPct(pct(pickedSize, folder.ancestors[0].size))} {storage === "cloud" ? tr("de lo que está en la nube", "of what is in the cloud") : tr("del espacio analizado", "of the scanned space")}</p>
                 </>
               ) : (
                 <>
                   <h3>{shown.id === 0 ? driveLetter(root) : shown.name}</h3>
                   <p>
-                    <span className="num">{size(shown.size)}</span> {tr("en disco", "on disk")} · {fmtPct(pct(shown.size, folder.ancestors[0].size))} {tr("del espacio analizado", "of the scanned space")} ·{" "}
+                    <span className="num">{size(shown.size)}</span> {where} · {fmtPct(pct(shown.size, folder.ancestors[0].size))} {storage === "cloud" ? tr("de lo que está en la nube", "of what is in the cloud") : tr("del espacio analizado", "of the scanned space")} ·{" "}
                     {shown.isDir ? <>{int(shown.files)} {tr("archivos", "files")}{shown.dirs > 0 && <> {tr("en", "in")} {int(shown.dirs)} {tr("carpetas", "folders")}</>}</> : <>{shown.ext ? `.${shown.ext}` : tr("sin extensión", "no extension")} · {CATEGORY[shown.category].name}</>}
                     {" "}· {tr("modificado", "modified")} {date(shown.modified)}
                   </p>
-                  <CloudNote node={shown} />
+                  {storage !== "cloud" && <CloudNote node={shown} />}
                   {shown.hardlink && <p className="cloud-note">{tr(`Este archivo tiene otro nombre en otra carpeta (enlace duro). Su espacio (${size(shown.logical)}) se contó allí, así que aquí no suma.`, `This file has another name in another folder (hard link). Its space (${size(shown.logical)}) was counted there, so it does not add up here.`)}</p>}
                   {shown.id === n.id && <div style={{ marginTop: 10, maxWidth: 420 }}><StackBar parts={folder.categories} total={n.size} /></div>}
                 </>

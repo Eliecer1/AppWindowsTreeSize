@@ -1,7 +1,7 @@
 import { tr } from "../i18n";
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
-import { FileStatus, NodeIcon } from "../components";
+import { FileStatus, NodeIcon, StorageToggle } from "../components";
 import { CATEGORY, date, driveLetter, size } from "../format";
 import type { Category, FileFilter, NodeInfo } from "../types";
 
@@ -16,7 +16,7 @@ const AGES: { days: number; label: () => string }[] = [
 
 /** Los archivos más grandes con filtros: tamaño, antigüedad, tipo y extensión. */
 export function Files({ ctx }: { ctx: Ctx }) {
-  const { api, version, drives } = ctx;
+  const { api, version, drives, storage } = ctx;
   const scanned = drives.filter((d) => d.scanned);
   const root = scanned.find((d) => d.root === ctx.activeRoot)?.root ?? scanned[0]?.root;
   const [filter, setFilter] = useState<FileFilter>({ minSize: 10 * MB, olderThanDays: 0, category: null, ext: "" });
@@ -28,10 +28,10 @@ export function Files({ ctx }: { ctx: Ctx }) {
     if (!root) return;
     let live = true;
     const t = setTimeout(() => {
-      api.findFiles(root, 0, filter, 300).then((r) => { if (live) { setItems(r); setChecked(new Set()); } }).catch((e) => ctx.toast(String(e), true));
+      api.findFiles(root, 0, { ...filter, storage }, 300).then((r) => { if (live) { setItems(r); setChecked(new Set()); } }).catch((e) => ctx.toast(String(e), true));
     }, 200);
     return () => { live = false; clearTimeout(t); };
-  }, [api, root, filter, version, ctx.toast]);
+  }, [api, root, filter, storage, version, ctx.toast]);
 
   const set = (patch: Partial<FileFilter>) => { setConfirm(false); setFilter((f) => ({ ...f, ...patch })); };
   const toggle = (id: number) => setChecked((c) => { const n = new Set(c); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -71,6 +71,9 @@ export function Files({ ctx }: { ctx: Ctx }) {
       </div>
 
       <div className="card filters">
+        <div className="fgroup">{tr("Dónde está", "Where")}
+          <StorageToggle value={storage} onChange={(s) => { setConfirm(false); ctx.setStorage(s); }} />
+        </div>
         <label>{tr("Tamaño mínimo", "Minimum size")}
           <select value={filter.minSize} onChange={(e) => set({ minSize: Number(e.target.value) })}>
             {SIZES.map((s) => <option key={s} value={s}>{s ? size(s) : tr("Cualquiera", "Any")}</option>)}
@@ -93,7 +96,7 @@ export function Files({ ctx }: { ctx: Ctx }) {
         <div className="sp" />
         <div className="filters-sum">
           <b className="num">{size(total)}</b>
-          <small className="muted">{tr("en", "in")} {list.length}{list.length === 300 ? "+" : ""} {tr("archivos", "files")}</small>
+          <small className="muted">{storage === "cloud" ? tr("en la nube, ", "in the cloud, ") : storage === "local" ? tr("en el disco, ", "on disk, ") : ""}{tr("en", "in")} {list.length}{list.length === 300 ? "+" : ""} {tr("archivos", "files")}</small>
         </div>
       </div>
 

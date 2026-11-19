@@ -1,7 +1,7 @@
 mod cleanup;
 mod saved;
 
-use scanner::{CategorySize, NodeId, NodeInfo, Progress, Tree};
+use scanner::{CategorySize, NodeId, NodeInfo, Progress, Storage, Tree};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -228,14 +228,15 @@ async fn query<T: Send + 'static>(
 
 /// Todo lo que la vista Explorar necesita de una carpeta en una sola llamada.
 #[tauri::command]
-async fn get_folder(root: String, id: NodeId, limit: usize, state: State<'_, AppState>) -> Result<FolderView, String> {
+async fn get_folder(root: String, id: NodeId, limit: usize, storage: Option<Storage>, state: State<'_, AppState>) -> Result<FolderView, String> {
+    let s = storage.unwrap_or_default();
     query(&state, &root, move |t| {
-        let node = t.info(id).ok_or("Elemento no encontrado")?;
+        let node = t.info_in(id, s).ok_or("Elemento no encontrado")?;
         Ok(FolderView {
-            total_children: t.kids(id).len(),
-            children: t.children(id, 0, limit),
-            ancestors: t.ancestors(id),
-            categories: t.categories(id),
+            total_children: t.count_children(id, s),
+            children: t.children_in(id, s, 0, limit),
+            ancestors: t.ancestors_in(id, s),
+            categories: t.categories_in(id, s),
             node,
         })
     })
@@ -271,8 +272,15 @@ async fn get_changes(root: String, app: AppHandle) -> Option<serde_json::Value> 
 }
 
 #[tauri::command]
-async fn get_children(root: String, id: NodeId, offset: usize, limit: usize, state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
-    query(&state, &root, move |t| t.children(id, offset, limit)).await
+async fn get_children(
+    root: String,
+    id: NodeId,
+    offset: usize,
+    limit: usize,
+    storage: Option<Storage>,
+    state: State<'_, AppState>,
+) -> Result<Vec<NodeInfo>, String> {
+    query(&state, &root, move |t| t.children_in(id, storage.unwrap_or_default(), offset, limit)).await
 }
 
 #[tauri::command]
@@ -355,8 +363,14 @@ async fn move_to_trash(root: String, ids: Vec<NodeId>, app: AppHandle, state: St
 
 /// Carpeta con varios niveles de hijos, para el mapa anidado y los anillos.
 #[tauri::command]
-async fn get_subtree(root: String, id: NodeId, depth: usize, state: State<'_, AppState>) -> Result<Option<scanner::SubNode>, String> {
-    query(&state, &root, move |t| t.subtree(id, depth.min(4), 60)).await
+async fn get_subtree(
+    root: String,
+    id: NodeId,
+    depth: usize,
+    storage: Option<Storage>,
+    state: State<'_, AppState>,
+) -> Result<Option<scanner::SubNode>, String> {
+    query(&state, &root, move |t| t.subtree(id, depth.min(4), 60, storage.unwrap_or_default())).await
 }
 
 /// Archivos bajo `id` que cumplen los filtros de la vista Archivos, de mayor a menor.
