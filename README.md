@@ -38,7 +38,7 @@ Cada cambio en `main` se compila en GitHub Actions. Entra en la pestaña **Actio
 1. Genera la clave de firma de actualizaciones una sola vez: `npx tauri signer generate -w ~/.tauri/awts.key`. Guarda la clave privada fuera del repositorio.
 2. Copia la clave pública en `plugins.updater.pubkey` de `src-tauri/tauri.conf.json`.
 3. En GitHub, en **Settings → Secrets and variables → Actions**, crea `TAURI_SIGNING_PRIVATE_KEY` (el contenido de la clave privada) y `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-4. Sube la versión en `tauri.conf.json` y crea una etiqueta `v0.2.0`. El flujo **Publicar** compila, firma y publica la versión; las apps instaladas la detectan solas.
+4. Sube la versión en `tauri.conf.json` y crea una etiqueta `v0.2.0`. El flujo **Publicar versión** compila, firma y publica la versión; las apps instaladas la detectan solas.
 
 Para que Windows no muestre el aviso de SmartScreen hace falta además un certificado de firma de código. Si lo tienes, añade `WINDOWS_CERTIFICATE` (el .pfx en base64), `WINDOWS_CERTIFICATE_PASSWORD`; el flujo lo detecta solo.
 
