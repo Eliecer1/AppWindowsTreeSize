@@ -1,5 +1,6 @@
+import { tr } from "./i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CATEGORY, pct, size } from "./format";
+import { CATEGORY, int, pct, size } from "./format";
 import type { CategorySize, NodeInfo, SubNode } from "./types";
 
 export function Ring({ used, total, size: px = 150 }: { used: number; total: number; size?: number }) {
@@ -77,22 +78,22 @@ export function RefreshIcon({ px = 15, spin = false }: { px?: number; spin?: boo
 export function FileStatus({ node }: { node: Pick<NodeInfo, "cloudOnly" | "hardlink"> }) {
   if (node.hardlink) {
     return (
-      <span className="chip status link-st" title="Es otro nombre de un archivo que ya se contó en otra carpeta. No ocupa espacio extra.">
+      <span className="chip status link-st" title={tr("Es otro nombre de un archivo que ya se contó en otra carpeta. No ocupa espacio extra.", "Another name for a file already counted in another folder. It takes no extra space.")}>
         <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
         </svg>
-        Ya contado
+        {tr("Ya contado", "Counted elsewhere")}
       </span>
     );
   }
   return node.cloudOnly ? (
-    <span className="chip status cloud-st" title="No está descargado: no ocupa espacio en tu disco"><CloudIcon px={12} /> En la nube</span>
+    <span className="chip status cloud-st" title={tr("No está descargado: no ocupa espacio en tu disco", "Not downloaded: takes no space on your disk")}><CloudIcon px={12} /> {tr("En la nube", "In the cloud")}</span>
   ) : (
-    <span className="chip status disk-st" title="Está guardado en tu disco y ocupa espacio">
+    <span className="chip status disk-st" title={tr("Está guardado en tu disco y ocupa espacio", "Stored on your disk and takes space")}>
       <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="13" width="18" height="7" rx="2" /><path d="M5 13l2.5-8h9L19 13M7 16.5h.01" />
       </svg>
-      En el disco
+      {tr("En el disco", "On disk")}
     </span>
   );
 }
@@ -104,8 +105,8 @@ export function CloudNote({ node }: { node: { isDir: boolean; cloud: number; clo
     <p className="cloud-note">
       <CloudIcon />
       {node.cloudOnly
-        ? <>Está solo en la nube: pesa {size(node.logical)}, pero no ocupa espacio en tu disco.</>
-        : <>Además hay {size(node.cloud)} en {node.cloudFiles.toLocaleString("es-ES")} archivos que están solo en la nube y no ocupan espacio en tu disco.</>}
+        ? <>{tr(`Está solo en la nube: pesa ${size(node.logical)}, pero no ocupa espacio en tu disco.`, `Cloud only: it is ${size(node.logical)}, but takes no space on your disk.`)}</>
+        : <>{tr(`Además hay ${size(node.cloud)} en ${int(node.cloudFiles)} archivos que están solo en la nube y no ocupan espacio en tu disco.`, `Plus ${size(node.cloud)} in ${int(node.cloudFiles)} cloud-only files that take no space on your disk.`)}</>}
     </p>
   );
 }
@@ -170,7 +171,7 @@ export function Treemap({ items, onPick, nested, onPickId, onMenu }: {
   }, []);
   const rects = squarify(items.filter((i) => i.size > 0).slice(0, 80), 0, 0, box.w, box.h);
   return (
-    <div className="treemap" ref={ref} aria-label="Mapa de espacio">
+    <div className="treemap" ref={ref} aria-label={tr("Mapa de espacio", "Space map")}>
       {rects.map(({ item, x, y, w, h }) => {
         const sub = nested?.get(item.id);
         const inner = sub && w > 150 && h > 110 ? squarify(sub.children.filter((c) => c.size > 0).slice(0, 40), 6, 40, w - 12, h - 46) : [];
@@ -222,7 +223,7 @@ export function Sunburst({ root, onPick }: { root: SubNode; onPick: (n: SubNode)
   const shown = hover ?? root;
   return (
     <div className="sunburst">
-      <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label="Anillos de espacio">
+      <svg viewBox={`0 0 ${S} ${S}`} role="img" aria-label={tr("Anillos de espacio", "Space rings")}>
         {arcs.map(({ n, a0, a1, depth }) => (
           <path key={`${depth}-${n.id}`} d={path(a0, a1, R0 + depth * W + 1, R0 + (depth + 1) * W - 1)} fill={CATEGORY[n.category].color}
             opacity={1 - depth * 0.16} className={n.isDir ? "dir" : ""} onMouseEnter={() => setHover(n)} onMouseLeave={() => setHover(null)} onClick={() => onPick(n)}>

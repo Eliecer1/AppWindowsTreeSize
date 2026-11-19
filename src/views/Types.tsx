@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
 import { CATEGORY, driveLetter, fmtPct, pct, size } from "../format";
@@ -16,11 +17,11 @@ export function Types({ ctx }: { ctx: Ctx }) {
   if (!root) {
     return (
       <div className="view">
-        <div className="head"><div><h2>Tipos de archivo</h2></div></div>
+        <div className="head"><div><h2>{tr("Tipos de archivo", "File types")}</h2></div></div>
         <div className="card empty-state">
-          <h3>Primero analiza un disco</h3>
-          <p>Verás cuánto ocupan tus videos, fotos, juegos, instaladores y archivos temporales.</p>
-          {ctx.primary && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(ctx.primary!.root)}>Analizar {driveLetter(ctx.primary.root)}</button>}
+          <h3>{tr("Primero analiza un disco", "Scan a disk first")}</h3>
+          <p>{tr("Verás cuánto ocupan tus videos, fotos, juegos, instaladores y archivos temporales.", "You will see how much space your videos, photos, games, installers and temp files take.")}</p>
+          {ctx.primary && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(ctx.primary!.root)}>{tr("Analizar", "Scan")} {driveLetter(ctx.primary.root)}</button>}
         </div>
       </div>
     );
@@ -34,7 +35,7 @@ export function Types({ ctx }: { ctx: Ctx }) {
   return (
     <div className="view">
       <div className="head">
-        <div><h2>Tipos de archivo</h2><p>Cuánto ocupa cada tipo en {driveLetter(root)}</p></div>
+        <div><h2>{tr("Tipos de archivo", "File types")}</h2><p>{tr("Cuánto ocupa cada tipo en", "How much each type takes on")} {driveLetter(root)}</p></div>
         <div className="actions">
           {scanned.map((d) => (
             <button key={d.root} className={`btn ${d.root === root ? "primary" : ""}`} onClick={() => ctx.setActiveRoot(d.root)}>{driveLetter(d.root)}</button>
@@ -56,7 +57,7 @@ export function Types({ ctx }: { ctx: Ctx }) {
               return el;
             })}
           </svg>
-          <div className="c"><div className="bignum" style={{ fontSize: 28 }}>{size(total)}</div><small className="muted">en {cats.length} tipos</small></div>
+          <div className="c"><div className="bignum" style={{ fontSize: 28 }}>{size(total)}</div><small className="muted">{tr(`en ${cats.length} tipos`, `in ${cats.length} types`)}</small></div>
         </div>
         <div className="card">
           {cats.map((c) => (

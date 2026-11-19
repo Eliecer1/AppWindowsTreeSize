@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Ctx } from "../App";
 import { CloudIcon, CloudNote, FileStatus, NodeIcon, RefreshIcon, StackBar, Sunburst, Treemap } from "../components";
@@ -66,11 +67,11 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   const reveal = async (item: NodeInfo) => {
     try {
       await api.openInExplorer(item.path, item.isDir);
-      if (api.isDemo) ctx.toast(`En la app de escritorio se abre el Explorador en ${item.path}`);
+      if (api.isDemo) ctx.toast(tr(`En la app de escritorio se abre el Explorador en ${item.path}`, `The desktop app opens File Explorer at ${item.path}`));
     } catch (e) { ctx.toast(String(e), true); }
   };
   const copyPath = async (item: NodeInfo) => {
-    try { await navigator.clipboard.writeText(item.path); ctx.toast("Ruta copiada."); } catch { ctx.toast("No se pudo copiar la ruta.", true); }
+    try { await navigator.clipboard.writeText(item.path); ctx.toast(tr("Ruta copiada.", "Path copied.")); } catch { ctx.toast(tr("No se pudo copiar la ruta.", "Could not copy the path."), true); }
   };
   /** Lo que afectan los botones de papelera y borrar: la selección múltiple o el elemento elegido. */
   const targets = (): NodeInfo[] => (picked.length > 1 ? picked : sel ? [sel] : n && n.id !== 0 ? [n] : []);
@@ -82,8 +83,8 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
     try {
       const ids = list.map((x) => x.id);
       const freed = how === "trash" ? await api.moveToTrash(root, ids) : await api.deletePermanently(root, ids);
-      const what = list.length === 1 ? list[0].name : `${list.length} elementos`;
-      ctx.toast(how === "trash" ? `${what} se envió a la papelera. Liberaste ${size(freed)}.` : `${what} se borró definitivamente. Liberaste ${size(freed)}.`);
+      const what = list.length === 1 ? list[0].name : tr(`${list.length} elementos`, `${list.length} items`);
+      ctx.toast(how === "trash" ? tr(`${what} se envió a la papelera. Liberaste ${size(freed)}.`, `${what} moved to the Recycle Bin. You freed ${size(freed)}.`) : tr(`${what} se borró definitivamente. Liberaste ${size(freed)}.`, `${what} was permanently deleted. You freed ${size(freed)}.`));
       if (list.some((x) => x.id === n.id) && n.parent !== null) navigate(n.parent, false);
       setSel(null);
       setMulti(new Set());
@@ -101,11 +102,11 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
     try {
       const id = await api.rescanFolder(root, f.id);
       if (id === null) {
-        ctx.toast(`${f.name} ya no existe. Se quitó de la lista.`);
+        ctx.toast(tr(`${f.name} ya no existe. Se quitó de la lista.`, `${f.name} no longer exists. It was removed from the list.`));
         if (f.id === n.id) navigate(n.parent ?? 0, false);
       } else {
         const now = (await api.getFolder(root, id, 0)).node;
-        ctx.toast(now.size === f.size ? `${f.name} está al día: ${size(now.size)}.` : `${f.name} actualizada: antes ${size(f.size)}, ahora ${size(now.size)}.`);
+        ctx.toast(now.size === f.size ? tr(`${f.name} está al día: ${size(now.size)}.`, `${f.name} is up to date: ${size(now.size)}.`) : tr(`${f.name} actualizada: antes ${size(f.size)}, ahora ${size(now.size)}.`, `${f.name} updated: was ${size(f.size)}, now ${size(now.size)}.`));
       }
       ctx.bump();
     } catch (e) { ctx.toast(String(e), true); }
@@ -116,10 +117,10 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
     if (!root || !n) return;
     try {
       const base = (n.id === 0 ? driveLetter(root).replace(":", "") : n.name).replace(/[\\/:*?"<>|]/g, "_");
-      const path = await api.pickSavePath(`Informe ${base}.html`);
+      const path = await api.pickSavePath(tr(`Informe ${base}.html`, `Report ${base}.html`));
       if (!path) return;
       await api.exportReport(root, n.id, path);
-      ctx.toast("Informe guardado.");
+      ctx.toast(tr("Informe guardado.", "Report saved."));
     } catch (e) { ctx.toast(String(e), true); }
   };
 
@@ -222,11 +223,11 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   if (!root) {
     return (
       <div className="view">
-        <div className="head"><div><h2>Explorar</h2></div></div>
+        <div className="head"><div><h2>{tr("Explorar", "Explore")}</h2></div></div>
         <div className="card empty-state">
-          <h3>Primero analiza un disco</h3>
-          <p>Cuando termine el análisis podrás recorrer cada carpeta, ver qué ocupa más y abrirla en el Explorador de Windows.</p>
-          {ctx.primary && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(ctx.primary!.root)}>Analizar {driveLetter(ctx.primary.root)}</button>}
+          <h3>{tr("Primero analiza un disco", "Scan a drive first")}</h3>
+          <p>{tr("Cuando termine el análisis podrás recorrer cada carpeta, ver qué ocupa más y abrirla en el Explorador de Windows.", "When the scan finishes you can browse every folder, see what takes the most space and open it in File Explorer.")}</p>
+          {ctx.primary && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(ctx.primary!.root)}>{tr("Analizar", "Scan")} {driveLetter(ctx.primary.root)}</button>}
         </div>
       </div>
     );
@@ -242,13 +243,13 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
   const pickedSize = picked.reduce((a, c) => a + c.size, 0);
   const tlist = targets();
   const tsize = tlist.reduce((a, c) => a + c.size, 0);
-  const tname = tlist.length === 1 ? tlist[0].name : `${tlist.length} elementos`;
+  const tname = tlist.length === 1 ? tlist[0].name : tr(`${tlist.length} elementos`, `${tlist.length} items`);
   const nested = new Map((sub?.children ?? []).map((c) => [c.id, c]));
 
   return (
     <div className="view">
       <div className="head">
-        <div><h2>Explorar</h2><p>Haz clic para entrar, clic derecho para más opciones. Ctrl y Mayús seleccionan varios.</p></div>
+        <div><h2>{tr("Explorar", "Explore")}</h2><p>{tr("Haz clic para entrar, clic derecho para más opciones. Ctrl y Mayús seleccionan varios.", "Click to open, right-click for more options. Ctrl and Shift select several.")}</p></div>
         <div className="actions">
           {scanned.map((d) => (
             <button key={d.root} className={`btn ${d.root === root ? "primary" : ""}`} title={d.root}
@@ -258,8 +259,8 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
       </div>
 
       <div className="crumbs-bar">
-        <nav className="crumbs" aria-label="Ruta">
-          <button aria-label="Atrás (Alt+←)" title="Atrás (Alt+←)" disabled={!back.current.length}
+        <nav className="crumbs" aria-label={tr("Ruta", "Path")}>
+          <button aria-label={tr("Atrás (Alt+←)", "Back (Alt+←)")} title={tr("Atrás (Alt+←)", "Back (Alt+←)")} disabled={!back.current.length}
             onClick={() => { const p = back.current.pop(); if (p !== undefined) { fwd.current.push(n.id); navigate(p, false); } }}>‹</button>
           {folder.ancestors.map((a, i) => (
             <span key={a.id} style={{ display: "contents" }}>
@@ -268,30 +269,30 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             </span>
           ))}
         </nav>
-        <div className="viewtoggle" role="group" aria-label="Vista">
-          <button aria-pressed={mode === "blocks"} onClick={() => setMode("blocks")}>Bloques</button>
-          <button aria-pressed={mode === "rings"} onClick={() => setMode("rings")}>Anillos</button>
+        <div className="viewtoggle" role="group" aria-label={tr("Vista", "View")}>
+          <button aria-pressed={mode === "blocks"} onClick={() => setMode("blocks")}>{tr("Bloques", "Blocks")}</button>
+          <button aria-pressed={mode === "rings"} onClick={() => setMode("rings")}>{tr("Anillos", "Rings")}</button>
         </div>
-        <button className="btn" onClick={exportReport} title="Guarda un informe de esta carpeta en HTML o CSV">Exportar</button>
+        <button className="btn" onClick={exportReport} title={tr("Guarda un informe de esta carpeta en HTML o CSV", "Save a report of this folder as HTML or CSV")}>{tr("Exportar", "Export")}</button>
         {live ? (
           <span className="live-chip" role="status">
             <RefreshIcon spin /> Analizando… <span className="num">{int(live.files)}</span> archivos, <span className="num">{size(live.bytes)}</span>.
           </span>
         ) : (
           <button className="btn refresh" disabled={refreshing || !!ctx.scanning} onClick={() => refresh()}
-            title={n.id === 0 ? "Vuelve a analizar todo (F5)" : "Vuelve a leer solo esta carpeta y lo que tiene dentro (F5)"}>
+            title={n.id === 0 ? tr("Vuelve a analizar todo (F5)", "Scan everything again (F5)") : tr("Vuelve a leer solo esta carpeta y lo que tiene dentro (F5)", "Re-read only this folder and its contents (F5)")}>
             <RefreshIcon spin={refreshing || !!ctx.scanning} />
-            {refreshing ? "Refrescando…" : n.id === 0 ? "Analizar de nuevo" : "Refrescar carpeta"}
+            {refreshing ? tr("Refrescando…", "Refreshing…") : n.id === 0 ? tr("Analizar de nuevo", "Scan again") : tr("Refrescar carpeta", "Refresh folder")}
           </button>
         )}
       </div>
 
       <div className="explore">
         <div className={`card list ${hasFiles ? "with-status" : ""}`} role="list">
-          {children.length === 0 && <p className="muted" style={{ padding: 10 }}>Esta carpeta está vacía.</p>}
+          {children.length === 0 && <p className="muted" style={{ padding: 10 }}>{tr("Esta carpeta está vacía.", "This folder is empty.")}</p>}
           {hasFiles && (
             <div className="row head-row" aria-hidden="true">
-              <span style={{ width: 16 }} /><span>Nombre</span><span>Estado</span><span>Tamaño</span>
+              <span style={{ width: 16 }} /><span>{tr("Nombre", "Name")}</span><span>{tr("Estado", "Status")}</span><span>{tr("Tamaño", "Size")}</span>
             </div>
           )}
           {children.map((c) => (
@@ -301,8 +302,8 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
               <span className="nm">{c.name}{!c.isDir && c.ext && <small>.{c.ext}</small>}</span>
               {hasFiles && <span className="st">{!c.isDir && <FileStatus node={c} />}</span>}
               {c.cloudOnly
-                ? <span className="sz cloud" title={`Pesa ${size(c.logical)}, pero está solo en la nube`}>{size(c.logical)}</span>
-                : <span className="sz">{size(c.size)}{c.cloud > 0 && <span className="cloud" style={{ marginLeft: 5 }} title={`${size(c.cloud)} más están solo en la nube`}><CloudIcon px={12} /></span>}</span>}
+                ? <span className="sz cloud" title={tr(`Pesa ${size(c.logical)}, pero está solo en la nube`, `${size(c.logical)}, but only in the cloud`)}>{size(c.logical)}</span>
+                : <span className="sz">{size(c.size)}{c.cloud > 0 && <span className="cloud" style={{ marginLeft: 5 }} title={tr(`${size(c.cloud)} más están solo en la nube`, `${size(c.cloud)} more are only in the cloud`)}><CloudIcon px={12} /></span>}</span>}
               <span className="bar"><i style={{ width: `${(c.size / biggest) * 100}%`, background: CATEGORY[c.category].color }} /></span>
             </button>
           ))}
@@ -310,7 +311,7 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
             <div className="more"><button className="btn" onClick={async () => {
               const more = await api.getChildren(root, n.id, children.length, PAGE);
               setChildren((c) => [...c, ...more]);
-            }}>Mostrar más ({int(folder.totalChildren - children.length)} restantes)</button></div>
+            }}>{tr("Mostrar más", "Show more")} ({int(folder.totalChildren - children.length)} {tr("restantes", "left")})</button></div>
           )}
         </div>
 
@@ -323,41 +324,41 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
               {many ? (
                 <>
                   <h3>{picked.length} elementos seleccionados</h3>
-                  <p><span className="num">{size(pickedSize)}</span> en disco · {fmtPct(pct(pickedSize, folder.ancestors[0].size))} del espacio analizado</p>
+                  <p><span className="num">{size(pickedSize)}</span> {tr("en disco", "on disk")} · {fmtPct(pct(pickedSize, folder.ancestors[0].size))} {tr("del espacio analizado", "of the scanned space")}</p>
                 </>
               ) : (
                 <>
                   <h3>{shown.id === 0 ? driveLetter(root) : shown.name}</h3>
                   <p>
-                    <span className="num">{size(shown.size)}</span> en disco · {fmtPct(pct(shown.size, folder.ancestors[0].size))} del espacio analizado ·{" "}
-                    {shown.isDir ? <>{int(shown.files)} archivos{shown.dirs > 0 && <> en {int(shown.dirs)} carpetas</>}</> : <>{shown.ext ? `.${shown.ext}` : "sin extensión"} · {CATEGORY[shown.category].name}</>}
-                    {" "}· modificado {date(shown.modified)}
+                    <span className="num">{size(shown.size)}</span> {tr("en disco", "on disk")} · {fmtPct(pct(shown.size, folder.ancestors[0].size))} {tr("del espacio analizado", "of the scanned space")} ·{" "}
+                    {shown.isDir ? <>{int(shown.files)} {tr("archivos", "files")}{shown.dirs > 0 && <> {tr("en", "in")} {int(shown.dirs)} {tr("carpetas", "folders")}</>}</> : <>{shown.ext ? `.${shown.ext}` : tr("sin extensión", "no extension")} · {CATEGORY[shown.category].name}</>}
+                    {" "}· {tr("modificado", "modified")} {date(shown.modified)}
                   </p>
                   <CloudNote node={shown} />
-                  {shown.hardlink && <p className="cloud-note">Este archivo tiene otro nombre en otra carpeta (enlace duro). Su espacio ({size(shown.logical)}) se contó allí, así que aquí no suma.</p>}
+                  {shown.hardlink && <p className="cloud-note">{tr(`Este archivo tiene otro nombre en otra carpeta (enlace duro). Su espacio (${size(shown.logical)}) se contó allí, así que aquí no suma.`, `This file has another name in another folder (hard link). Its space (${size(shown.logical)}) was counted there, so it does not add up here.`)}</p>}
                   {shown.id === n.id && <div style={{ marginTop: 10, maxWidth: 420 }}><StackBar parts={folder.categories} total={n.size} /></div>}
                 </>
               )}
             </div>
             <div className="actions">
-              {!many && <button className="btn" onClick={() => reveal(shown)}>Abrir en el Explorador</button>}
+              {!many && <button className="btn" onClick={() => reveal(shown)}>{tr("Abrir en el Explorador", "Open in File Explorer")}</button>}
               {tlist.length > 0 && tlist.every((x) => x.id !== 0) && (
-                <button className="btn" disabled={!!live} title={live ? "Espera a que termine el análisis" : "Supr"} onClick={() => setConfirm("trash")}>Enviar a la papelera</button>
+                <button className="btn" disabled={!!live} title={live ? tr("Espera a que termine el análisis", "Wait for the scan to finish") : tr("Supr", "Del")} onClick={() => setConfirm("trash")}>{tr("Enviar a la papelera", "Move to Recycle Bin")}</button>
               )}
             </div>
             {confirm && !live && tlist.length > 0 && (
               <div className={`confirm ${confirm === "delete" ? "danger" : ""}`} style={{ gridColumn: "1 / -1" }}>
-                <b>{confirm === "trash" ? `¿Enviar ${tname} a la papelera?` : `¿Borrar ${tname} definitivamente?`}</b>
+                <b>{confirm === "trash" ? tr(`¿Enviar ${tname} a la papelera?`, `Move ${tname} to the Recycle Bin?`) : tr(`¿Borrar ${tname} definitivamente?`, `Permanently delete ${tname}?`)}</b>
                 <span>
-                  {tsize > 0 ? `Se liberarán ${size(tsize)}.` : "No liberará espacio en tu disco."}{" "}
-                  {confirm === "trash" ? "Podrás recuperarlo desde la papelera de reciclaje." : "No pasa por la papelera: no se podrá recuperar."}
+                  {tsize > 0 ? tr(`Se liberarán ${size(tsize)}.`, `This frees ${size(tsize)}.`) : tr("No liberará espacio en tu disco.", "This will not free space on your disk.")}{" "}
+                  {confirm === "trash" ? tr("Podrás recuperarlo desde la papelera de reciclaje.", "You can restore it from the Recycle Bin.") : tr("No pasa por la papelera: no se podrá recuperar.", "It skips the Recycle Bin: it cannot be recovered.")}
                 </span>
                 {tlist.some((x) => x.cloud > 0) && (
-                  <span><b>Ojo:</b> hay archivos en OneDrive u otra nube. Borrarlos aquí también los borra de la nube, y no libera espacio por esa parte.</span>
+                  <span><b>{tr("Ojo:", "Note:")}</b> {tr("hay archivos en OneDrive u otra nube. Borrarlos aquí también los borra de la nube, y no libera espacio por esa parte.", "some files are in OneDrive or another cloud. Deleting them here also deletes them from the cloud, and frees no space for that part.")}</span>
                 )}
                 <div className="actions">
-                  <button className="btn primary" onClick={() => remove(confirm)}>{confirm === "trash" ? "Sí, enviar a la papelera" : "Sí, borrar definitivamente"}</button>
-                  <button className="btn" onClick={() => setConfirm(null)}>Cancelar</button>
+                  <button className="btn primary" onClick={() => remove(confirm)}>{confirm === "trash" ? tr("Sí, enviar a la papelera", "Yes, move to Recycle Bin") : tr("Sí, borrar definitivamente", "Yes, delete permanently")}</button>
+                  <button className="btn" onClick={() => setConfirm(null)}>{tr("Cancelar", "Cancel")}</button>
                 </div>
               </div>
             )}
@@ -367,17 +368,17 @@ export function Explore({ ctx, target }: { ctx: Ctx; target: { root: string; id:
 
       {menu && (
         <div className="ctxmenu" style={{ left: menu.x, top: menu.y }} role="menu" onClick={(e) => e.stopPropagation()}>
-          {many ? <button disabled>{picked.length} elementos · {size(pickedSize)}</button> : (
+          {many ? <button disabled>{picked.length} {tr("elementos", "items")} · {size(pickedSize)}</button> : (
             <>
-              {menu.item.isDir && <button role="menuitem" onClick={() => { setMenu(null); navigate(menu.item.id); }}>Entrar <kbd>Intro</kbd></button>}
-              <button role="menuitem" onClick={() => { setMenu(null); reveal(menu.item); }}>Abrir en el Explorador</button>
-              <button role="menuitem" onClick={() => { setMenu(null); copyPath(menu.item); }}>Copiar ruta</button>
-              {menu.item.isDir && <button role="menuitem" disabled={!!ctx.scanning || refreshing} onClick={() => { setMenu(null); refresh(menu.item); }}>Refrescar esta carpeta</button>}
+              {menu.item.isDir && <button role="menuitem" onClick={() => { setMenu(null); navigate(menu.item.id); }}>{tr("Entrar", "Open")} <kbd>{tr("Intro", "Enter")}</kbd></button>}
+              <button role="menuitem" onClick={() => { setMenu(null); reveal(menu.item); }}>{tr("Abrir en el Explorador", "Open in File Explorer")}</button>
+              <button role="menuitem" onClick={() => { setMenu(null); copyPath(menu.item); }}>{tr("Copiar ruta", "Copy path")}</button>
+              {menu.item.isDir && <button role="menuitem" disabled={!!ctx.scanning || refreshing} onClick={() => { setMenu(null); refresh(menu.item); }}>{tr("Refrescar esta carpeta", "Refresh this folder")}</button>}
             </>
           )}
           <hr />
-          <button role="menuitem" disabled={!!live} onClick={() => { setMenu(null); setConfirm("trash"); }}>Enviar a la papelera <kbd>Supr</kbd></button>
-          <button role="menuitem" className="danger" disabled={!!live} onClick={() => { setMenu(null); setConfirm("delete"); }}>Borrar definitivamente <kbd>Mayús+Supr</kbd></button>
+          <button role="menuitem" disabled={!!live} onClick={() => { setMenu(null); setConfirm("trash"); }}>{tr("Enviar a la papelera", "Move to Recycle Bin")} <kbd>{tr("Supr", "Del")}</kbd></button>
+          <button role="menuitem" className="danger" disabled={!!live} onClick={() => { setMenu(null); setConfirm("delete"); }}>{tr("Borrar definitivamente", "Delete permanently")} <kbd>{tr("Mayús+Supr", "Shift+Del")}</kbd></button>
         </div>
       )}
     </div>

@@ -1,3 +1,4 @@
+import { tr } from "./i18n";
 import type { Changes, Drive, DupGroup, DupProgress, FileFilter, FolderView, NodeInfo, ScanDone, ScanProgress, SubNode, Suggestion } from "./types";
 import { demoApi } from "./demo";
 
@@ -97,7 +98,7 @@ async function tauriApi(): Promise<Api> {
       return save({
         title: "Guardar informe",
         defaultPath: defaultName,
-        filters: [{ name: "Página web", extensions: ["html"] }, { name: "Hoja de cálculo (CSV)", extensions: ["csv"] }],
+        filters: [{ name: tr("Página web", "Web page"), extensions: ["html"] }, { name: tr("Hoja de cálculo (CSV)", "Spreadsheet (CSV)"), extensions: ["csv"] }],
       });
     },
   };

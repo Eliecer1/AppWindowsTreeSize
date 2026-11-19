@@ -298,3 +298,4 @@ main { padding: 20px; min-width: 0; overflow: auto; }
 .crumbs-bar .crumbs { flex: 1; min-width: 0; }
 .crumbs button:disabled { opacity: .35; }
 .update-btn { background: var(--ok-soft); color: var(--ok); border-color: transparent; font-weight: 600; }
+.iconbtn.lang { font: 600 12px var(--f-num); width: auto; padding: 0 8px; }

@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
 import { NodeIcon } from "../components";
@@ -53,8 +54,8 @@ export function Duplicates({ ctx }: { ctx: Ctx }) {
   if (!root) {
     return (
       <div className="view">
-        <div className="head"><div><h2>Duplicados</h2></div></div>
-        <div className="card empty-state"><h3>Primero analiza un disco</h3><p>Después podrás buscar archivos repetidos: fotos, videos o instaladores que tienes guardados más de una vez.</p></div>
+        <div className="head"><div><h2>{tr("Duplicados", "Duplicates")}</h2></div></div>
+        <div className="card empty-state"><h3>{tr("Primero analiza un disco", "Scan a drive first")}</h3><p>{tr("Después podrás buscar archivos repetidos: fotos, videos o instaladores que tienes guardados más de una vez.", "Then you can look for repeated files: photos, videos or installers saved more than once.")}</p></div>
       </div>
     );
   }
@@ -70,7 +71,7 @@ export function Duplicates({ ctx }: { ctx: Ctx }) {
     setConfirm(false);
     try {
       const freed = await api.moveToTrash(root, sel.map((f) => f.id));
-      ctx.toast(`Se enviaron ${sel.length} copias a la papelera. Liberaste ${size(freed)}.`);
+      ctx.toast(tr(`Se enviaron ${sel.length} copias a la papelera. Liberaste ${size(freed)}.`, `Moved ${sel.length} copies to the Recycle Bin. You freed ${size(freed)}.`));
       setGroups((gs) => (gs ?? []).map((g) => ({ ...g, files: g.files.filter((f) => !checked.has(f.id)) })).filter((g) => g.files.length > 1)
         .map((g) => ({ ...g, wasted: g.size * (g.files.length - 1) })));
       setChecked(new Set());
@@ -81,7 +82,7 @@ export function Duplicates({ ctx }: { ctx: Ctx }) {
   return (
     <div className="view">
       <div className="head">
-        <div><h2>Duplicados</h2><p>Archivos con exactamente el mismo contenido en {driveLetter(root)}. Se compara el contenido, no solo el nombre.</p></div>
+        <div><h2>{tr("Duplicados", "Duplicates")}</h2><p>{tr(`Archivos con exactamente el mismo contenido en ${driveLetter(root)}. Se compara el contenido, no solo el nombre.`, `Files with exactly the same content on ${driveLetter(root)}. Content is compared, not just the name.`)}</p></div>
         <div className="actions">
           {scanned.map((d) => (
             <button key={d.root} className={`btn ${d.root === root ? "primary" : ""}`} disabled={!!busy} onClick={() => ctx.setActiveRoot(d.root)}>{driveLetter(d.root)}</button>
@@ -90,7 +91,7 @@ export function Duplicates({ ctx }: { ctx: Ctx }) {
       </div>
 
       <div className="card filters">
-        <label>Archivos de al menos
+        <label>{tr("Archivos de al menos", "Files of at least")}
           <select value={minSize} disabled={!!busy} onChange={(e) => setMinSize(Number(e.target.value))}>
             {[1 * MB, 10 * MB, 100 * MB, 1024 * MB].map((s) => <option key={s} value={s}>{size(s)}</option>)}
           </select>
@@ -98,50 +99,50 @@ export function Duplicates({ ctx }: { ctx: Ctx }) {
         {busy ? (
           <>
             <span className="muted">
-              Comparando… <span className="num">{int(busy.checked)}</span> de <span className="num">{int(busy.candidates)}</span> archivos, <span className="num">{size(busy.bytes)}</span> leídos
+              {tr("Comparando…", "Comparing…")} <span className="num">{int(busy.checked)}</span> {tr("de", "of")} <span className="num">{int(busy.candidates)}</span> {tr("archivos", "files")}, <span className="num">{size(busy.bytes)}</span> {tr("leídos", "read")}
             </span>
-            <button className="btn" onClick={() => api.cancelDuplicates()}>Cancelar</button>
+            <button className="btn" onClick={() => api.cancelDuplicates()}>{tr("Cancelar", "Cancel")}</button>
           </>
         ) : (
-          <button className="btn primary" onClick={search}>{groups ? "Buscar de nuevo" : "Buscar duplicados"}</button>
+          <button className="btn primary" onClick={search}>{groups ? tr("Buscar de nuevo", "Search again") : tr("Buscar duplicados", "Find duplicates")}</button>
         )}
         <div className="sp" />
         {groups && groups.length > 0 && (
-          <div className="filters-sum"><b className="num">{size(wasted)}</b><small className="muted">repetidos en {groups.length} grupos</small></div>
+          <div className="filters-sum"><b className="num">{size(wasted)}</b><small className="muted">{tr("repetidos en", "repeated in")} {groups.length} {tr("grupos", "groups")}</small></div>
         )}
       </div>
 
       {groups && groups.length > 0 && (
         <div className="card selbar">
-          {sel.length > 0 ? <span><b>{sel.length}</b> copias seleccionadas · <b className="num">{size(selSize)}</b></span> : <span className="muted">Marca las copias que sobran, o deja que la app elija.</span>}
-          <button className="btn" onClick={keepNewest}>Dejar solo la más reciente de cada grupo</button>
+          {sel.length > 0 ? <span><b>{sel.length}</b> {tr("copias seleccionadas", "copies selected")} · <b className="num">{size(selSize)}</b></span> : <span className="muted">{tr("Marca las copias que sobran, o deja que la app elija.", "Tick the extra copies, or let the app choose.")}</span>}
+          <button className="btn" onClick={keepNewest}>{tr("Dejar solo la más reciente de cada grupo", "Keep only the newest in each group")}</button>
           {sel.length > 0 && (confirm ? (
             <>
-              <button className="btn primary" disabled={wipesGroup} onClick={trash}>Sí, enviar a la papelera</button>
-              <button className="btn" onClick={() => setConfirm(false)}>Cancelar</button>
+              <button className="btn primary" disabled={wipesGroup} onClick={trash}>{tr("Sí, enviar a la papelera", "Yes, move to Recycle Bin")}</button>
+              <button className="btn" onClick={() => setConfirm(false)}>{tr("Cancelar", "Cancel")}</button>
             </>
           ) : (
-            <button className="btn primary" disabled={wipesGroup} title={wipesGroup ? "Deja al menos una copia de cada archivo" : undefined} onClick={() => setConfirm(true)}>Enviar a la papelera</button>
+            <button className="btn primary" disabled={wipesGroup} title={wipesGroup ? tr("Deja al menos una copia de cada archivo", "Keep at least one copy of each file") : undefined} onClick={() => setConfirm(true)}>{tr("Enviar a la papelera", "Move to Recycle Bin")}</button>
           ))}
-          {wipesGroup && <span className="chip bad">Deja al menos una copia de cada archivo</span>}
+          {wipesGroup && <span className="chip bad">{tr("Deja al menos una copia de cada archivo", "Keep at least one copy of each file")}</span>}
         </div>
       )}
 
       {groups && groups.length === 0 && (
-        <div className="card empty-state"><h3>No hay duplicados de más de {size(minSize)}</h3><p>Prueba con un tamaño menor si quieres revisar archivos más pequeños.</p></div>
+        <div className="card empty-state"><h3>{tr(`No hay duplicados de más de ${size(minSize)}`, `No duplicates over ${size(minSize)}`)}</h3><p>{tr("Prueba con un tamaño menor si quieres revisar archivos más pequeños.", "Try a smaller size to check smaller files.")}</p></div>
       )}
 
       <div className="dup-groups">
         {(groups ?? []).map((g, gi) => (
           <section className="card dup" key={gi}>
-            <header><b>{g.files[0].name}</b><span className="muted">{g.files.length} copias de {size(g.size)}</span><b className="num up">{size(g.wasted)} repetidos</b></header>
+            <header><b>{g.files[0].name}</b><span className="muted">{g.files.length} {tr("copias de", "copies of")} {size(g.size)}</span><b className="num up">{size(g.wasted)} {tr("repetidos", "repeated")}</b></header>
             {g.files.map((f) => (
               <label key={f.id} className={`row dup-row ${checked.has(f.id) ? "sel" : ""}`}>
                 <input type="checkbox" checked={checked.has(f.id)} onChange={() => toggle(f.id)} />
                 <NodeIcon node={f} px={16} />
                 <span className="t" title={f.path}>{f.path}</span>
                 <span className="muted num">{date(f.modified)}</span>
-                <button className="btn small" onClick={(e) => { e.preventDefault(); ctx.explore(root, f.parent ?? 0, f); }}>Ver</button>
+                <button className="btn small" onClick={(e) => { e.preventDefault(); ctx.explore(root, f.parent ?? 0, f); }}>{tr("Ver", "Show")}</button>
               </label>
             ))}
           </section>

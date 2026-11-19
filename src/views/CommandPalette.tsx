@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import type { Ctx } from "../App";
 import { NodeIcon } from "../components";
@@ -32,7 +33,7 @@ export function CommandPalette({ ctx, root, onClose }: { ctx: Ctx; root: string;
   return (
     <div className="palette-bg" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="palette" role="dialog" aria-label="Buscar">
-        <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Busca por nombre o extensión (ej. .iso, Temp, node_modules)"
+        <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("Busca por nombre o extensión (ej. .iso, Temp, node_modules)", "Search by name or extension (e.g. .iso, Temp, node_modules)")}
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") { setIdx((i) => Math.min(i + 1, res.length - 1)); e.preventDefault(); }
             else if (e.key === "ArrowUp") { setIdx((i) => Math.max(i - 1, 0)); e.preventDefault(); }
@@ -40,9 +41,9 @@ export function CommandPalette({ ctx, root, onClose }: { ctx: Ctx; root: string;
             else if (e.key === "Escape") onClose();
           }} />
         <ul role="listbox">
-          {error && <div className="empty">{error.includes("analizado") ? "Analiza un disco para poder buscar en él." : error}</div>}
-          {!error && q.trim() && res.length === 0 && <div className="empty">No hay resultados para “{q}”.</div>}
-          {!error && !q.trim() && <div className="empty">Escribe para buscar entre todos los archivos analizados.</div>}
+          {error && <div className="empty">{error.includes("analizado") ? tr("Analiza un disco para poder buscar en él.", "Scan a disk to search it.") : error}</div>}
+          {!error && q.trim() && res.length === 0 && <div className="empty">{tr(`No hay resultados para “${q}”.`, `No results for “${q}”.`)}</div>}
+          {!error && !q.trim() && <div className="empty">{tr("Escribe para buscar entre todos los archivos analizados.", "Type to search all scanned files.")}</div>}
           {res.map((n, i) => (
             <li key={n.id} role="option" aria-selected={i === idx} onClick={() => pick(n)} onMouseEnter={() => setIdx(i)}>
               <NodeIcon node={n} />

@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useState } from "react";
 import type { Ctx } from "../App";
 import { NodeIcon } from "../components";
@@ -23,7 +24,7 @@ export function Changes({ ctx }: { ctx: Ctx }) {
 
   const head = (
     <div className="head">
-      <div><h2>Cambios</h2><p>Qué creció, qué es nuevo y qué se borró entre los dos últimos análisis.</p></div>
+      <div><h2>{tr("Cambios", "Changes")}</h2><p>{tr("Qué creció, qué es nuevo y qué se borró entre los dos últimos análisis.", "What grew, what is new and what was deleted between the last two scans.")}</p></div>
       <div className="actions">
         {scanned.map((x) => (
           <button key={x.root} className={`btn ${x.root === root ? "primary" : ""}`} onClick={() => ctx.setActiveRoot(x.root)}>{driveLetter(x.root)}</button>
@@ -37,9 +38,9 @@ export function Changes({ ctx }: { ctx: Ctx }) {
       <div className="view">
         {head}
         <div className="card empty-state">
-          <h3>{root ? "Todavía no hay con qué comparar" : "Primero analiza un disco"}</h3>
-          <p>La app guarda cada análisis. La próxima vez que analices {root ? driveLetter(root) : "el disco"}, aquí verás qué carpetas crecieron, qué archivos son nuevos y qué se borró desde la vez anterior.</p>
-          {root && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(root)}>Analizar {driveLetter(root)} de nuevo</button>}
+          <h3>{root ? tr("Todavía no hay con qué comparar", "Nothing to compare yet") : tr("Primero analiza un disco", "Scan a drive first")}</h3>
+          <p>{tr(`La app guarda cada análisis. La próxima vez que analices ${root ? driveLetter(root) : "el disco"}, aquí verás qué carpetas crecieron, qué archivos son nuevos y qué se borró desde la vez anterior.`, `The app saves every scan. Next time you scan ${root ? driveLetter(root) : "the drive"}, you will see here which folders grew, which files are new and what was deleted since last time.`)}</p>
+          {root && <button className="btn primary" disabled={!!ctx.scanning} onClick={() => ctx.startScan(root)}>{tr(`Analizar ${driveLetter(root)} de nuevo`, `Scan ${driveLetter(root)} again`)}</button>}
         </div>
       </div>
     );
@@ -58,7 +59,7 @@ export function Changes({ ctx }: { ctx: Ctx }) {
   const explore = async (c: Change) => {
     // Un archivo se muestra dentro de su carpeta.
     const id = await api.locate(root, fullPath(c.isDir ? [...path, c] : path)).catch(() => null);
-    if (id === null) { ctx.toast(`${c.name} ya no está en el análisis actual.`); return; }
+    if (id === null) { ctx.toast(tr(`${c.name} ya no está en el análisis actual.`, `${c.name} is not in the current scan anymore.`)); return; }
     ctx.explore(root, id);
   };
 
@@ -67,16 +68,16 @@ export function Changes({ ctx }: { ctx: Ctx }) {
       {head}
       <div className="card changes-sum">
         <div>
-          <span className="eyebrow">Del {dateTime(data.from)} al {dateTime(data.to)}</span>
+          <span className="eyebrow">{tr("Del", "From")} {dateTime(data.from)} {tr("al", "to")} {dateTime(data.to)}</span>
           <div className={`bignum ${d(cur) > 0 ? "up" : "down"}`}>{delta(d(cur))}</div>
           <p className="muted" style={{ margin: 0 }}>
-            {path.length === 1 ? driveLetter(root) : cur.name} pasó de {size(cur.old)} a {size(cur.new)}.
-            {grew > 0 && <> Creció {size(grew)}</>}{shrank > 0 && <>{grew > 0 ? " y se" : " Se"} liberaron {size(shrank)}</>}{(grew > 0 || shrank > 0) && "."}
+            {path.length === 1 ? driveLetter(root) : cur.name} {tr("pasó de", "went from")} {size(cur.old)} {tr("a", "to")} {size(cur.new)}.
+            {grew > 0 && <> {tr("Creció", "It grew")} {size(grew)}</>}{shrank > 0 && <>{grew > 0 ? tr(" y se liberaron", " and freed") : tr(" Se liberaron", " Freed")} {size(shrank)}</>}{(grew > 0 || shrank > 0) && "."}
           </p>
         </div>
       </div>
 
-      <nav className="crumbs" aria-label="Ruta">
+      <nav className="crumbs" aria-label={tr("Ruta", "Path")}>
         {path.map((c, i) => (
           <span key={i} style={{ display: "contents" }}>
             {i > 0 && <span className="sep">›</span>}
@@ -86,20 +87,20 @@ export function Changes({ ctx }: { ctx: Ctx }) {
       </nav>
 
       <div className="card list changes-list" role="list">
-        {kids.length === 0 && <p className="muted" style={{ padding: 10 }}>Dentro de esta carpeta no hay cambios de más de 1 MB.</p>}
+        {kids.length === 0 && <p className="muted" style={{ padding: 10 }}>{tr("Dentro de esta carpeta no hay cambios de más de 1 MB.", "No changes over 1 MB inside this folder.")}</p>}
         {kids.map((k, i) => {
           const v = d(k);
           return (
             <div key={i} role="listitem" className="row change-row">
-              <button className="nm" disabled={!k.isDir || !k.children.length} onClick={() => setPath([...path, k])} title={k.isDir && k.children.length ? "Ver qué cambió dentro" : undefined}>
+              <button className="nm" disabled={!k.isDir || !k.children.length} onClick={() => setPath([...path, k])} title={k.isDir && k.children.length ? tr("Ver qué cambió dentro", "See what changed inside") : undefined}>
                 <NodeIcon node={{ isDir: k.isDir, category: "other" }} px={16} />
                 <span className="t">{k.name}</span>
-                {!k.existed && <span className="chip warn">Nuevo</span>}
-                {!k.exists && <span className="chip ok">Borrado</span>}
+                {!k.existed && <span className="chip warn">{tr("Nuevo", "New")}</span>}
+                {!k.exists && <span className="chip ok">{tr("Borrado", "Deleted")}</span>}
               </button>
               <span className="muted num">{k.existed ? size(k.old) : "—"} → {k.exists ? size(k.new) : "—"}</span>
               <b className={`num ${v > 0 ? "up" : "down"}`}>{delta(v)}</b>
-              {k.exists ? <button className="btn small" onClick={() => explore(k)}>Explorar</button> : <span />}
+              {k.exists ? <button className="btn small" onClick={() => explore(k)}>{tr("Explorar", "Explore")}</button> : <span />}
               <span className="bar"><i style={{ width: `${(Math.abs(v) / biggest) * 100}%`, background: v > 0 ? "var(--warn)" : "var(--ok)" }} /></span>
             </div>
           );
